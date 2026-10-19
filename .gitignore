@@ -1,0 +1,5 @@
+# Real settings with the API key - never commit
+config.ini
+
+# Compiled builds
+*.exe
