@@ -34,75 +34,120 @@ if (API_URL = "" || MODEL = "") {
     ExitApp
 }
 
-; [Default] is the plain fix (Ctrl+click unless changed); [Preset1] .. [Preset9]
-; are tones. Each has NAME, HOTKEY and PROMPT; an empty HOTKEY disables it.
-; (SYSTEM_PROMPT in [Settings] is still read so older config.ini files keep working)
-global DEFAULT_PROMPT := IniRead(CONFIG_FILE, "Default", "PROMPT"
-    , IniRead(CONFIG_FILE, "Settings", "SYSTEM_PROMPT"
-    , "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."))
-global PRESETS := [{
-    name:   IniRead(CONFIG_FILE, "Default", "NAME", "Fix grammar"),
-    hotkey: IniRead(CONFIG_FILE, "Default", "HOTKEY", "^LButton"),
-    prompt: DEFAULT_PROMPT
-}]
+; Tone presets: [Preset1] .. [Preset9], each with NAME, HOTKEY and PROMPT
+; (an empty HOTKEY means the tone is only used via the default hotkey).
+; DEFAULT_HOTKEY (Ctrl+Left click) runs the tone chosen by DEFAULT_PRESET.
+global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
+global PRESETS := []
 Loop MAX_PRESETS {
     section := "Preset" A_Index
-    PRESETS.Push({
-        name:   IniRead(CONFIG_FILE, section, "NAME", section),
-        hotkey: IniRead(CONFIG_FILE, section, "HOTKEY", ""),
-        prompt: IniRead(CONFIG_FILE, section, "PROMPT", DEFAULT_PROMPT)
-    })
-}
-
-global BUSY := false
-summary := ""
-for preset in PRESETS {
-    if (preset.hotkey = "")
+    name := IniRead(CONFIG_FILE, section, "NAME", "")
+    prompt := IniRead(CONFIG_FILE, section, "PROMPT", "")
+    if (name = "" && prompt = "")
         continue
     ; Allow line breaks in prompts via \n
-    preset.prompt := StrReplace(preset.prompt, "\n", "`n")
-    RegExMatch(preset.hotkey, "^([~$*<>^!+#]*)(.+)$", &m)
-    preset.mods := RegExReplace(m[1], "[~$*<>]")
-    preset.key := m[2]
-    preset.isMouse := RegExMatch(preset.key, "i)^(LButton|RButton|MButton|XButton1|XButton2)$")
-    ; $ = keyboard hook, so passing the key through doesn't re-trigger the hotkey
-    ; (mouse hotkeys always use the hook)
-    key := (preset.isMouse || InStr(preset.hotkey, "$")) ? preset.hotkey : "$" preset.hotkey
-    try Hotkey(key, RunPreset.Bind(preset))
-    catch {
-        MsgBox("Invalid HOTKEY in config.ini: " preset.hotkey, "TextFixer", "Icon!")
-        ExitApp
-    }
-    summary .= ReadableHotkey(preset) " = " preset.name "`n"
+    PRESETS.Push({
+        index:  A_Index,
+        name:   name != "" ? name : section,
+        hotkey: IniRead(CONFIG_FILE, section, "HOTKEY", ""),
+        prompt: StrReplace(prompt != "" ? prompt : FALLBACK_PROMPT, "\n", "`n")
+    })
 }
+if (PRESETS.Length = 0) {
+    MsgBox("No presets found in config.ini. Copy the [Preset1] .. [Preset5] sections from config.example.ini.", "TextFixer", "Icon!")
+    ExitApp
+}
+
+global DEFAULT_HOTKEY := IniRead(CONFIG_FILE, "Settings", "DEFAULT_HOTKEY", "^LButton")
+global DEFAULT_INDEX  := IniRead(CONFIG_FILE, "Settings", "DEFAULT_PRESET", "1")
+global DEFAULT_HK     := ""
+global BUSY := false
+
+for preset in PRESETS
+    if (preset.hotkey != "")
+        preset.hk := BindHotkey(preset.hotkey, RunPreset.Bind(preset))
+if (DEFAULT_HOTKEY != "")
+    DEFAULT_HK := BindHotkey(DEFAULT_HOTKEY, (hk, *) => RunPreset(DefaultPreset(), hk))
+
+; Tray menu: pick the default tone (saved to config.ini)
+global DefaultMenu := Menu()
+for preset in PRESETS
+    DefaultMenu.Add(preset.index ". " preset.name, SetDefault.Bind(preset))
+UpdateDefaultMenu()
 
 A_IconTip := "TextFixer"
 A_TrayMenu.Add()
-A_TrayMenu.Add("Show hotkeys", (*) => MsgBox(summary, "TextFixer hotkeys"))
+A_TrayMenu.Add("Default tone" (DEFAULT_HK ? " (" ReadableHotkey(DEFAULT_HK) ")" : ""), DefaultMenu)
+A_TrayMenu.Add("Show hotkeys", (*) => MsgBox(HotkeySummary(), "TextFixer hotkeys"))
 A_TrayMenu.Add("Edit config.ini", (*) => Run('notepad.exe "' CONFIG_FILE '"'))
 A_TrayMenu.Add("Reload config", (*) => Reload())
-TrayTip("Running. Select text and press a hotkey:`n" summary, "TextFixer")
+TrayTip("Running. Select text and press a hotkey:`n" HotkeySummary(), "TextFixer")
+
+DefaultPreset() {
+    for preset in PRESETS
+        if (preset.index = DEFAULT_INDEX)
+            return preset
+    return PRESETS[1]
+}
+
+SetDefault(preset, *) {
+    global DEFAULT_INDEX := preset.index
+    IniWrite(preset.index, CONFIG_FILE, "Settings", "DEFAULT_PRESET")
+    UpdateDefaultMenu()
+}
+
+UpdateDefaultMenu() {
+    current := DefaultPreset()
+    for preset in PRESETS {
+        item := preset.index ". " preset.name
+        (preset.index = current.index) ? DefaultMenu.Check(item) : DefaultMenu.Uncheck(item)
+    }
+}
+
+HotkeySummary() {
+    text := DEFAULT_HK ? ReadableHotkey(DEFAULT_HK) " = " DefaultPreset().name " (default)`n" : ""
+    for preset in PRESETS
+        if preset.HasOwnProp("hk")
+            text .= ReadableHotkey(preset.hk) " = " preset.name "`n"
+    return text
+}
+
+; Register a hotkey; returns its parsed form (modifiers + key) for pass-through
+BindHotkey(hotkey, callback) {
+    RegExMatch(hotkey, "^([~$*<>^!+#]*)(.+)$", &m)
+    hk := {mods: RegExReplace(m[1], "[~$*<>]"), key: m[2]}
+    hk.isMouse := RegExMatch(hk.key, "i)^(LButton|RButton|MButton|XButton1|XButton2)$")
+    ; $ = keyboard hook, so passing the key through doesn't re-trigger the hotkey
+    ; (mouse hotkeys always use the hook)
+    key := (hk.isMouse || InStr(hotkey, "$")) ? hotkey : "$" hotkey
+    try Hotkey(key, callback.Bind(hk))
+    catch {
+        MsgBox("Invalid hotkey in config.ini: " hotkey, "TextFixer", "Icon!")
+        ExitApp
+    }
+    return hk
+}
 
 ; "^LButton" -> "Ctrl+Left click", "^1" -> "Ctrl+1"
-ReadableHotkey(preset) {
+ReadableHotkey(hk) {
     static names := Map("^", "Ctrl+", "!", "Alt+", "+", "Shift+", "#", "Win+")
     static buttons := Map("LButton", "Left click", "RButton", "Right click", "MButton", "Middle click")
     text := ""
-    Loop Parse, preset.mods
+    Loop Parse, hk.mods
         text .= names[A_LoopField]
-    return text (buttons.Has(preset.key) ? buttons[preset.key] : StrUpper(preset.key))
+    return text (buttons.Has(hk.key) ? buttons[hk.key] : StrUpper(hk.key))
 }
 
 ; Give the app the key or click the hotkey intercepted, as if TextFixer wasn't running
-PassThrough(preset) {
-    if !preset.isMouse {
-        Send(preset.mods "{" preset.key "}")
+PassThrough(hk) {
+    if !hk.isMouse {
+        Send(hk.mods "{" hk.key "}")
         return
     }
     ; Hold the button for as long as the user does, so Ctrl+drag still works
-    Send("{Blind}" preset.mods "{" preset.key " down}")
-    KeyWait(preset.key)
-    Send("{Blind}{" preset.key " up}")
+    Send("{Blind}" hk.mods "{" hk.key " down}")
+    KeyWait(hk.key)
+    Send("{Blind}{" hk.key " up}")
 }
 
 IsExcludedApp() {
@@ -117,10 +162,10 @@ IsExcludedApp() {
     return false
 }
 
-RunPreset(preset, *) {
+RunPreset(preset, hk, *) {
     global BUSY
     if (BUSY || IsExcludedApp()) {
-        PassThrough(preset)
+        PassThrough(hk)
         return
     }
 
@@ -131,7 +176,7 @@ RunPreset(preset, *) {
     Send("^c")
     if !ClipWait(SELECTION_MS / 1000) || DllCall("IsClipboardFormatAvailable", "UInt", 15) {  ; 15 = CF_HDROP
         A_Clipboard := savedClip
-        PassThrough(preset)
+        PassThrough(hk)
         return
     }
     original := A_Clipboard

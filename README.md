@@ -15,7 +15,7 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
    - `API_URL`: your server's chat endpoint, e.g. `http://192.168.1.10:8000/v1/chat/completions`
    - `API_KEY`: your key (leave empty if the server has no `--api-key`)
    - `MODEL`: the model name, as listed at `http://YOUR_SERVER:8000/v1/models`
-   - optionally, tweak the `[Default]` and `[Preset1]`…`[Preset5]` prompts
+   - optionally, `DEFAULT_PRESET` and the `[Preset1]`…`[Preset5]` prompts
 5. Double-click `TextFixer.ahk`. A green **H** icon appears in the system tray.
 
 `config.ini` is in `.gitignore`, so your real key is never uploaded.
@@ -23,17 +23,18 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
 ## Usage
 
 1. Select text in any app (email, Word, browser, chat…).
-2. Hold **Ctrl** and **left-click** the selection to fix grammar and spelling (keeps your tone),
+2. Hold **Ctrl** and **left-click** the selection to rewrite it in your **default tone**,
    or press a tone hotkey:
 
-   | Hotkey           | Preset       | What it does                                         |
-   |------------------|--------------|------------------------------------------------------|
-   | Ctrl+Left click  | Fix grammar  | Default: fixes spelling, grammar, punctuation         |
-   | Ctrl+1           | Casual       | Relaxed, conversational                              |
-   | Ctrl+2           | Professional | Polite business tone for work email                  |
-   | Ctrl+3           | Sarcastic    | Dry, witty, playful sarcasm                          |
-   | Ctrl+4           | Diplomatic   | Softens blunt or negative wording, stays clear       |
-   | Ctrl+5           | Confident    | Direct and assertive, removes "just", "sorry to bother"… |
+   | Hotkey | Tone         | What it does                                              |
+   |--------|--------------|-----------------------------------------------------------|
+   | Ctrl+1 | Casual       | Relaxed, conversational (**default** for Ctrl+Left click) |
+   | Ctrl+2 | Professional | Polite business tone for work email                       |
+   | Ctrl+3 | Sarcastic    | Dry, witty, playful sarcasm                               |
+   | Ctrl+4 | Diplomatic   | Softens blunt or negative wording, stays clear            |
+   | Ctrl+5 | Confident    | Direct and assertive, removes "just", "sorry to bother"…  |
+
+   Every tone also fixes spelling and grammar.
 
 3. Wait for the tooltip to disappear. The selection is replaced with the result.
 
@@ -45,28 +46,32 @@ longer than usual.
 Your clipboard is restored afterwards. Right-click the tray icon → **Show hotkeys** to see the
 current list.
 
-## Changing hotkeys and presets
+## Choosing the default tone
 
-The default fix and each tone have their own section in `config.ini`:
+The default tone (used by Ctrl+Left click) is tone 1, Casual. To change it:
+
+- Right-click the tray icon → **Default tone** → pick a tone. It is saved to `config.ini`.
+- Or set `DEFAULT_PRESET` in `config.ini` to the tone's number, e.g. `DEFAULT_PRESET=2` for
+  Professional, then **Reload config**.
+
+To use a different click or key for the default, change `DEFAULT_HOTKEY` (e.g. `DEFAULT_HOTKEY=^!d`
+for Ctrl+Alt+D). Leave it empty to turn it off.
+
+## Changing tones and hotkeys
+
+Each tone has its own section in `config.ini`:
 
 ```ini
-[Default]
-NAME=Fix grammar
-HOTKEY=^LButton
-PROMPT=You are a proofreader. ...
-
-[Preset1]
-NAME=Casual
-HOTKEY=^1
-PROMPT=Rewrite the user's text in a relaxed, casual ...
+[Preset3]
+NAME=Sarcastic
+HOTKEY=^3
+PROMPT=Rewrite the user's text with a dry, witty, sarcastic tone. ...
 ```
 
 - `HOTKEY` uses AutoHotkey syntax: `^` = Ctrl, `!` = Alt, `+` = Shift, `#` = Win,
-  `LButton` = left click. For example, `^LButton` = Ctrl+Left click, `^1` = Ctrl+1 and
-  `^!1` = Ctrl+Alt+1 (the old style).
-- Leave `HOTKEY` empty (`HOTKEY=`) to turn a preset off.
-- You can have up to 9 tone presets (`[Preset1]`…`[Preset9]`). A preset without `PROMPT` uses the
-  `[Default]` prompt.
+  `LButton` = left click. For example, `^3` = Ctrl+3 and `^!3` = Ctrl+Alt+3 (the old style).
+- Leave `HOTKEY` empty (`HOTKEY=`) if a tone should only be used as the default.
+- You can have up to 9 tones (`[Preset1]`…`[Preset9]`). Delete a section to remove a tone.
 - Use `\n` for a line break inside a `PROMPT`.
 
 After editing, right-click the tray icon → **Reload config**.
@@ -98,7 +103,7 @@ To start it automatically with Windows, press `Win+R`, type `shell:startup`, and
 - **Timeout / cannot connect**: check that the server is reachable from this PC, or raise `TIMEOUT`.
 - **Ctrl+click on a link rewrites text instead of opening the link**: this happens when text
   elsewhere in the same window is still selected. Click once to clear the selection first, or
-  change the `[Default]` hotkey.
+  change `DEFAULT_HOTKEY`.
 - **A hotkey rewrites text when nothing is selected**: some editors (e.g. VS Code) copy the whole
   line on Ctrl+C with no selection. Add that app to `EXCLUDE_APPS` (e.g. `EXCEL.EXE,Code.exe`).
 - **Non-English characters in prompts look broken**: in Notepad, *Save As* `config.ini` with
