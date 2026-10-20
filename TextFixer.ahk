@@ -1,11 +1,13 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 
-; TextFixer - select text anywhere, press the hotkey, and the text is replaced
-; with a corrected version from your OpenAI-compatible (vLLM) server.
+; TextFixer - select text anywhere, press a preset hotkey, and the text is replaced
+; with a rewritten version from your OpenAI-compatible (vLLM) server.
+; If nothing is selected, the hotkey is passed through to the app unchanged.
 ; All settings live in config.ini next to this script (or the compiled .exe).
 
 global CONFIG_FILE := A_ScriptDir "\config.ini"
+global MAX_PRESETS := 9
 
 if !FileExist(CONFIG_FILE) {
     MsgBox("config.ini not found in:`n" A_ScriptDir "`n`nCopy config.example.ini to config.ini and fill in your settings.", "TextFixer", "Icon!")
@@ -18,49 +20,109 @@ global MODEL         := IniRead(CONFIG_FILE, "Settings", "MODEL", "")
 global SYSTEM_PROMPT := IniRead(CONFIG_FILE, "Settings", "SYSTEM_PROMPT", "Fix spelling, grammar and punctuation. Return only the corrected text.")
 global TEMPERATURE   := IniRead(CONFIG_FILE, "Settings", "TEMPERATURE", "0.2")
 global TIMEOUT_SEC   := IniRead(CONFIG_FILE, "Settings", "TIMEOUT", "60")
-global HOTKEY_KEY    := IniRead(CONFIG_FILE, "Settings", "HOTKEY", "^!f")
+global SELECTION_MS  := IniRead(CONFIG_FILE, "Settings", "SELECTION_WAIT_MS", "300")
+global EXCLUDE_APPS  := IniRead(CONFIG_FILE, "Settings", "EXCLUDE_APPS", "")
 
-; Allow line breaks in the prompt via \n
-SYSTEM_PROMPT := StrReplace(SYSTEM_PROMPT, "\n", "`n")
 if !IsNumber(TEMPERATURE)
     TEMPERATURE := "0.2"
 if !IsInteger(TIMEOUT_SEC)
     TIMEOUT_SEC := 60
+if !IsInteger(SELECTION_MS)
+    SELECTION_MS := 300
 
 if (API_URL = "" || MODEL = "") {
     MsgBox("API_URL and MODEL must be set in config.ini.", "TextFixer", "Icon!")
     ExitApp
 }
 
-try Hotkey(HOTKEY_KEY, FixSelectedText)
-catch {
-    MsgBox("Invalid HOTKEY in config.ini: " HOTKEY_KEY, "TextFixer", "Icon!")
-    ExitApp
+; Presets: [Preset1] .. [Preset9], each with NAME, HOTKEY and PROMPT.
+; A config without presets falls back to HOTKEY + SYSTEM_PROMPT in [Settings].
+global PRESETS := []
+Loop MAX_PRESETS {
+    section := "Preset" A_Index
+    hk := IniRead(CONFIG_FILE, section, "HOTKEY", "")
+    if (hk = "")
+        continue
+    PRESETS.Push({
+        name:   IniRead(CONFIG_FILE, section, "NAME", section),
+        hotkey: hk,
+        prompt: IniRead(CONFIG_FILE, section, "PROMPT", SYSTEM_PROMPT)
+    })
+}
+if (PRESETS.Length = 0)
+    PRESETS.Push({
+        name:   "Fix",
+        hotkey: IniRead(CONFIG_FILE, "Settings", "HOTKEY", "^!f"),
+        prompt: SYSTEM_PROMPT
+    })
+
+global BUSY := false
+summary := ""
+for preset in PRESETS {
+    ; Allow line breaks in prompts via \n
+    preset.prompt := StrReplace(preset.prompt, "\n", "`n")
+    preset.passKeys := HotkeyToSend(preset.hotkey)
+    ; $ = keyboard hook, so passing the key through doesn't re-trigger the hotkey
+    key := InStr(preset.hotkey, "$") ? preset.hotkey : "$" preset.hotkey
+    try Hotkey(key, RunPreset.Bind(preset))
+    catch {
+        MsgBox("Invalid HOTKEY in config.ini: " preset.hotkey, "TextFixer", "Icon!")
+        ExitApp
+    }
+    summary .= preset.hotkey " = " preset.name "`n"
 }
 
-A_IconTip := "TextFixer (" HOTKEY_KEY ")"
+A_IconTip := "TextFixer"
 A_TrayMenu.Add()
+A_TrayMenu.Add("Show hotkeys", (*) => MsgBox(summary, "TextFixer hotkeys"))
 A_TrayMenu.Add("Edit config.ini", (*) => Run('notepad.exe "' CONFIG_FILE '"'))
 A_TrayMenu.Add("Reload config", (*) => Reload())
-TrayTip("Running. Select text and press " HOTKEY_KEY ".", "TextFixer")
+TrayTip("Running. Select text and press a hotkey:`n" summary, "TextFixer")
 
-FixSelectedText(*) {
+; Turn a hotkey like "^1" or "^!F2" into Send syntax ("^{1}", "^!{F2}")
+HotkeyToSend(hk) {
+    RegExMatch(hk, "^([~$*<>^!+#]*)(.+)$", &m)
+    return RegExReplace(m[1], "[~$*<>]") "{" m[2] "}"
+}
+
+IsExcludedApp() {
+    if (EXCLUDE_APPS = "")
+        return false
+    try proc := WinGetProcessName("A")
+    catch
+        return false
+    for app in StrSplit(EXCLUDE_APPS, ",", " `t")
+        if (app != "" && app = proc)
+            return true
+    return false
+}
+
+RunPreset(preset, *) {
+    global BUSY
+    if (BUSY || IsExcludedApp()) {
+        Send(preset.passKeys)
+        return
+    }
+
+    ; Copy the selection; if nothing gets copied, nothing is selected
     savedClip := ClipboardAll()
     A_Clipboard := ""
     Send("^c")
-    if !ClipWait(1) {
+    if !ClipWait(SELECTION_MS / 1000) {
         A_Clipboard := savedClip
-        TrayTip("No text selected.", "TextFixer")
+        Send(preset.passKeys)
         return
     }
     original := A_Clipboard
 
-    ToolTip("Fixing text...")
+    BUSY := true
+    ToolTip(preset.name "...")
     try {
-        fixed := CallLLM(original)
+        fixed := CallLLM(original, preset.prompt)
     } catch as err {
         ToolTip()
         A_Clipboard := savedClip
+        BUSY := false
         MsgBox("Request failed:`n`n" err.Message, "TextFixer", "Iconx")
         return
     }
@@ -77,11 +139,12 @@ FixSelectedText(*) {
     Send("^v")
     Sleep(500)
     A_Clipboard := savedClip
+    BUSY := false
 }
 
-CallLLM(text) {
+CallLLM(text, prompt) {
     body := '{"model":' JsonEscape(MODEL)
-        . ',"messages":[{"role":"system","content":' JsonEscape(SYSTEM_PROMPT) '}'
+        . ',"messages":[{"role":"system","content":' JsonEscape(prompt) '}'
         . ',{"role":"user","content":' JsonEscape(text) '}]'
         . ',"temperature":' TEMPERATURE ',"stream":false}'
 
