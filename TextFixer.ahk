@@ -17,7 +17,6 @@ if !FileExist(CONFIG_FILE) {
 global API_URL       := IniRead(CONFIG_FILE, "Settings", "API_URL", "")
 global API_KEY       := IniRead(CONFIG_FILE, "Settings", "API_KEY", "")
 global MODEL         := IniRead(CONFIG_FILE, "Settings", "MODEL", "")
-global SYSTEM_PROMPT := IniRead(CONFIG_FILE, "Settings", "SYSTEM_PROMPT", "Fix spelling, grammar and punctuation. Return only the corrected text.")
 global TEMPERATURE   := IniRead(CONFIG_FILE, "Settings", "TEMPERATURE", "0.2")
 global TIMEOUT_SEC   := IniRead(CONFIG_FILE, "Settings", "TIMEOUT", "60")
 global SELECTION_MS  := IniRead(CONFIG_FILE, "Settings", "SELECTION_WAIT_MS", "300")
@@ -35,41 +34,46 @@ if (API_URL = "" || MODEL = "") {
     ExitApp
 }
 
-; Presets: [Preset1] .. [Preset9], each with NAME, HOTKEY and PROMPT.
-; A config without presets falls back to HOTKEY + SYSTEM_PROMPT in [Settings].
-global PRESETS := []
+; [Default] is the plain fix (Ctrl+click unless changed); [Preset1] .. [Preset9]
+; are tones. Each has NAME, HOTKEY and PROMPT; an empty HOTKEY disables it.
+; (SYSTEM_PROMPT in [Settings] is still read so older config.ini files keep working)
+global DEFAULT_PROMPT := IniRead(CONFIG_FILE, "Default", "PROMPT"
+    , IniRead(CONFIG_FILE, "Settings", "SYSTEM_PROMPT"
+    , "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."))
+global PRESETS := [{
+    name:   IniRead(CONFIG_FILE, "Default", "NAME", "Fix grammar"),
+    hotkey: IniRead(CONFIG_FILE, "Default", "HOTKEY", "^LButton"),
+    prompt: DEFAULT_PROMPT
+}]
 Loop MAX_PRESETS {
     section := "Preset" A_Index
-    hk := IniRead(CONFIG_FILE, section, "HOTKEY", "")
-    if (hk = "")
-        continue
     PRESETS.Push({
         name:   IniRead(CONFIG_FILE, section, "NAME", section),
-        hotkey: hk,
-        prompt: IniRead(CONFIG_FILE, section, "PROMPT", SYSTEM_PROMPT)
+        hotkey: IniRead(CONFIG_FILE, section, "HOTKEY", ""),
+        prompt: IniRead(CONFIG_FILE, section, "PROMPT", DEFAULT_PROMPT)
     })
 }
-if (PRESETS.Length = 0)
-    PRESETS.Push({
-        name:   "Fix",
-        hotkey: IniRead(CONFIG_FILE, "Settings", "HOTKEY", "^!f"),
-        prompt: SYSTEM_PROMPT
-    })
 
 global BUSY := false
 summary := ""
 for preset in PRESETS {
+    if (preset.hotkey = "")
+        continue
     ; Allow line breaks in prompts via \n
     preset.prompt := StrReplace(preset.prompt, "\n", "`n")
-    preset.passKeys := HotkeyToSend(preset.hotkey)
+    RegExMatch(preset.hotkey, "^([~$*<>^!+#]*)(.+)$", &m)
+    preset.mods := RegExReplace(m[1], "[~$*<>]")
+    preset.key := m[2]
+    preset.isMouse := RegExMatch(preset.key, "i)^(LButton|RButton|MButton|XButton1|XButton2)$")
     ; $ = keyboard hook, so passing the key through doesn't re-trigger the hotkey
-    key := InStr(preset.hotkey, "$") ? preset.hotkey : "$" preset.hotkey
+    ; (mouse hotkeys always use the hook)
+    key := (preset.isMouse || InStr(preset.hotkey, "$")) ? preset.hotkey : "$" preset.hotkey
     try Hotkey(key, RunPreset.Bind(preset))
     catch {
         MsgBox("Invalid HOTKEY in config.ini: " preset.hotkey, "TextFixer", "Icon!")
         ExitApp
     }
-    summary .= preset.hotkey " = " preset.name "`n"
+    summary .= ReadableHotkey(preset) " = " preset.name "`n"
 }
 
 A_IconTip := "TextFixer"
@@ -79,10 +83,26 @@ A_TrayMenu.Add("Edit config.ini", (*) => Run('notepad.exe "' CONFIG_FILE '"'))
 A_TrayMenu.Add("Reload config", (*) => Reload())
 TrayTip("Running. Select text and press a hotkey:`n" summary, "TextFixer")
 
-; Turn a hotkey like "^1" or "^!F2" into Send syntax ("^{1}", "^!{F2}")
-HotkeyToSend(hk) {
-    RegExMatch(hk, "^([~$*<>^!+#]*)(.+)$", &m)
-    return RegExReplace(m[1], "[~$*<>]") "{" m[2] "}"
+; "^LButton" -> "Ctrl+Left click", "^1" -> "Ctrl+1"
+ReadableHotkey(preset) {
+    static names := Map("^", "Ctrl+", "!", "Alt+", "+", "Shift+", "#", "Win+")
+    static buttons := Map("LButton", "Left click", "RButton", "Right click", "MButton", "Middle click")
+    text := ""
+    Loop Parse, preset.mods
+        text .= names[A_LoopField]
+    return text (buttons.Has(preset.key) ? buttons[preset.key] : StrUpper(preset.key))
+}
+
+; Give the app the key or click the hotkey intercepted, as if TextFixer wasn't running
+PassThrough(preset) {
+    if !preset.isMouse {
+        Send(preset.mods "{" preset.key "}")
+        return
+    }
+    ; Hold the button for as long as the user does, so Ctrl+drag still works
+    Send("{Blind}" preset.mods "{" preset.key " down}")
+    KeyWait(preset.key)
+    Send("{Blind}{" preset.key " up}")
 }
 
 IsExcludedApp() {
@@ -100,17 +120,18 @@ IsExcludedApp() {
 RunPreset(preset, *) {
     global BUSY
     if (BUSY || IsExcludedApp()) {
-        Send(preset.passKeys)
+        PassThrough(preset)
         return
     }
 
-    ; Copy the selection; if nothing gets copied, nothing is selected
+    ; Copy the selection; if no text gets copied (nothing selected, or files
+    ; selected in Explorer), let the app handle the key/click normally
     savedClip := ClipboardAll()
     A_Clipboard := ""
     Send("^c")
-    if !ClipWait(SELECTION_MS / 1000) {
+    if !ClipWait(SELECTION_MS / 1000) || DllCall("IsClipboardFormatAvailable", "UInt", 15) {  ; 15 = CF_HDROP
         A_Clipboard := savedClip
-        Send(preset.passKeys)
+        PassThrough(preset)
         return
     }
     original := A_Clipboard

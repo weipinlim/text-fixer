@@ -15,7 +15,7 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
    - `API_URL`: your server's chat endpoint, e.g. `http://192.168.1.10:8000/v1/chat/completions`
    - `API_KEY`: your key (leave empty if the server has no `--api-key`)
    - `MODEL`: the model name, as listed at `http://YOUR_SERVER:8000/v1/models`
-   - the `[Preset1]`…`[Preset5]` prompts (the examples are placeholders, replace them with your own)
+   - optionally, tweak the `[Default]` and `[Preset1]`…`[Preset5]` prompts
 5. Double-click `TextFixer.ahk`. A green **H** icon appears in the system tray.
 
 `config.ini` is in `.gitignore`, so your real key is never uploaded.
@@ -23,38 +23,50 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
 ## Usage
 
 1. Select text in any app (email, Word, browser, chat…).
-2. Press a preset hotkey:
+2. Hold **Ctrl** and **left-click** the selection to fix grammar and spelling (keeps your tone),
+   or press a tone hotkey:
 
-   | Hotkey | Example preset       |
-   |--------|----------------------|
-   | Ctrl+1 | Fix grammar          |
-   | Ctrl+2 | Professional         |
-   | Ctrl+3 | Friendly             |
-   | Ctrl+4 | Shorten              |
-   | Ctrl+5 | Translate to English |
+   | Hotkey           | Preset       | What it does                                         |
+   |------------------|--------------|------------------------------------------------------|
+   | Ctrl+Left click  | Fix grammar  | Default: fixes spelling, grammar, punctuation         |
+   | Ctrl+1           | Casual       | Relaxed, conversational                              |
+   | Ctrl+2           | Professional | Polite business tone for work email                  |
+   | Ctrl+3           | Sarcastic    | Dry, witty, playful sarcasm                          |
+   | Ctrl+4           | Diplomatic   | Softens blunt or negative wording, stays clear       |
+   | Ctrl+5           | Confident    | Direct and assertive, removes "just", "sorry to bother"… |
 
 3. Wait for the tooltip to disappear. The selection is replaced with the result.
 
-**No text selected?** The hotkey is passed straight through to the app, so normal shortcuts such as
-Ctrl+1–5 in Outlook, Teams and browser tabs keep working.
+**No text selected?** The key or click is passed straight through to the app, so normal shortcuts
+keep working: Ctrl+1–5 in Outlook, Teams and browser tabs, and Ctrl+click to open links,
+multi-select or Ctrl+drag. Because TextFixer first checks for a selection, these take about 0.3 s
+longer than usual.
 
 Your clipboard is restored afterwards. Right-click the tray icon → **Show hotkeys** to see the
 current list.
 
 ## Changing hotkeys and presets
 
-Each preset in `config.ini` has its own section:
+The default fix and each tone have their own section in `config.ini`:
 
 ```ini
-[Preset1]
+[Default]
 NAME=Fix grammar
-HOTKEY=^1
+HOTKEY=^LButton
 PROMPT=You are a proofreader. ...
+
+[Preset1]
+NAME=Casual
+HOTKEY=^1
+PROMPT=Rewrite the user's text in a relaxed, casual ...
 ```
 
-- `HOTKEY` uses AutoHotkey syntax: `^` = Ctrl, `!` = Alt, `+` = Shift, `#` = Win.
-  For example, `^1` = Ctrl+1 and `^!1` = Ctrl+Alt+1 (the old style).
-- You can have up to 9 presets (`[Preset1]`…`[Preset9]`). Delete a section to remove a preset.
+- `HOTKEY` uses AutoHotkey syntax: `^` = Ctrl, `!` = Alt, `+` = Shift, `#` = Win,
+  `LButton` = left click. For example, `^LButton` = Ctrl+Left click, `^1` = Ctrl+1 and
+  `^!1` = Ctrl+Alt+1 (the old style).
+- Leave `HOTKEY` empty (`HOTKEY=`) to turn a preset off.
+- You can have up to 9 tone presets (`[Preset1]`…`[Preset9]`). A preset without `PROMPT` uses the
+  `[Default]` prompt.
 - Use `\n` for a line break inside a `PROMPT`.
 
 After editing, right-click the tray icon → **Reload config**.
@@ -63,7 +75,7 @@ Other settings in `[Settings]`:
 
 - `EXCLUDE_APPS`: apps where the hotkeys always act as normal shortcuts (comma-separated process
   names). The default is `EXCEL.EXE`, because Excel copies the active cell even when no text is
-  selected, so Ctrl+1 (Format Cells) would otherwise be taken over.
+  selected, so Ctrl+1 (Format Cells) and Ctrl+click would otherwise be taken over.
 - `SELECTION_WAIT_MS`: how long to wait for the selection to be copied (default 300). Raise it if a
   slow app sometimes gets the normal shortcut when text *is* selected.
 
@@ -84,6 +96,9 @@ To start it automatically with Windows, press `Win+R`, type `shell:startup`, and
 - **"Request failed: HTTP 401"**: wrong `API_KEY`.
 - **"Request failed: HTTP 404"**: check `API_URL` ends with `/v1/chat/completions` and `MODEL` matches the server.
 - **Timeout / cannot connect**: check that the server is reachable from this PC, or raise `TIMEOUT`.
+- **Ctrl+click on a link rewrites text instead of opening the link**: this happens when text
+  elsewhere in the same window is still selected. Click once to clear the selection first, or
+  change the `[Default]` hotkey.
 - **A hotkey rewrites text when nothing is selected**: some editors (e.g. VS Code) copy the whole
   line on Ctrl+C with no selection. Add that app to `EXCLUDE_APPS` (e.g. `EXCEL.EXE,Code.exe`).
 - **Non-English characters in prompts look broken**: in Notepad, *Save As* `config.ini` with
