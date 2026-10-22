@@ -113,16 +113,16 @@ HotkeySummary() {
 }
 
 ; Register a hotkey; returns its parsed form (modifiers + key) for pass-through
-BindHotkey(hotkey, callback, where) {
-    RegExMatch(hotkey, "^([~$*<>^!+#]*)(.+)$", &m)
+BindHotkey(spec, callback, where) {
+    RegExMatch(spec, "^([~$*<>^!+#]*)(.+)$", &m)
     hk := {mods: RegExReplace(m[1], "[~$*<>]"), key: m[2]}
     hk.isMouse := RegExMatch(hk.key, "i)^(LButton|RButton|MButton|XButton1|XButton2)$")
     ; $ = keyboard hook, so passing the key through doesn't re-trigger the hotkey
     ; (mouse hotkeys always use the hook)
-    key := (hk.isMouse || InStr(hotkey, "$")) ? hotkey : "$" hotkey
+    key := (hk.isMouse || InStr(spec, "$")) ? spec : "$" spec
     try Hotkey(key, callback.Bind(hk))
     catch as err {
-        MsgBox("Invalid hotkey in config.ini`n`n" where "=" hotkey "`n`n" err.Message, "TextFixer", "Icon!")
+        MsgBox("Invalid hotkey in config.ini`n`n" where "=" spec "`n`n" err.Message, "TextFixer", "Icon!")
         ExitApp
     }
     return hk
