@@ -26,7 +26,7 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
 2. Hold **Ctrl** and **left-click** the selection to rewrite it in your **default tone**,
    **Ctrl+right-click** to pick any tone from a menu at the cursor,
    **Ctrl+Shift+left-click** to see every tone's result in a box next to the cursor (one tab each) and pick
-   one, **Ctrl+Shift+right-click** to see every tone's result as a menu at the cursor,
+   one, **Ctrl+Shift+right-click** to see every tone in one list at the cursor (hover for the full text),
    or press a tone hotkey:
 
    | Hotkey | Tone         | What it does                                              |
@@ -68,9 +68,10 @@ Two hotkeys run **every tone at once** so you can compare before choosing:
 - `PREVIEW_HOTKEY` (default `^+LButton`, Ctrl+Shift+Left click) opens a box next to the cursor
   with one tab per tone. Click a tab or press `1`–`9` to read that version, then **Use this**
   (or Enter) to replace your selection. **Cancel** or Esc leaves the text alone.
-- `RESULTS_MENU_HOTKEY` (default `^+RButton`, Ctrl+Shift+Right click) waits for all the tones, then
-  pops up a menu at the cursor with the start of each result. Click one to use it. The menu only
-  shows about 60 characters per row, so use the box above when you want to read the full text.
+- `RESULTS_MENU_HOTKEY` (default `^+RButton`, Ctrl+Shift+Right click) opens one small window at the
+  cursor with a row per tone, each showing the first 60 characters of its result. Hover a row to see
+  the full text in a tooltip. Click a row (or press `1`–`9`) to use it; Cancel or Esc leaves the
+  text alone.
 
 Leave either setting empty to turn it off.
 

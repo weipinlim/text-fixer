@@ -40,8 +40,8 @@ if (API_URL = "" || MODEL = "") {
 ; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
 ; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and shows the results
 ; in a box next to the cursor (one tab per tone); pick one to replace the selection.
-; RESULTS_MENU_HOTKEY (Ctrl+Shift+Right click) runs every tone at once and pops up the
-; results as a menu at the cursor.
+; RESULTS_MENU_HOTKEY (Ctrl+Shift+Right click) runs every tone at once and lists the
+; results in one window at the cursor (hover for the full text, click to use).
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
 global PRESETS := []
 Loop MAX_PRESETS {
@@ -235,9 +235,10 @@ PollJob(job) {
     return job.done
 }
 
-; Run every tone and pop the results up as a menu at the cursor
+; Run every tone and list the results in one small window at the cursor: each row
+; shows the start of a result, hovering shows the full text, clicking uses it
 RunResultsMenu(hk, *) {
-    global BUSY, MENU_OPEN, PENDING
+    global PREVIEW
     if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
         PassThrough(hk)
         return
@@ -248,53 +249,77 @@ RunResultsMenu(hk, *) {
         return
     }
 
-    BUSY := true
-    ToolTip("Running all tones...")
+    winId := WinExist("A")
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
+    g := Gui("+AlwaysOnTop +ToolWindow", "TextFixer - click one to use it (hover for the full text)")
+    g.SetFont("s10")
     jobs := StartAll(original)
-    Loop {
-        waiting := false
-        for job in jobs
-            if !PollJob(job)
-                waiting := true
-        if !waiting
-            break
-        Sleep(100)
-    }
-    ToolTip()
-    BUSY := false
-
-    m := Menu()
+    rows := []
     for job in jobs {
-        label := job.preset.index ". " job.preset.name ":  "
-        if (job.error != "") {
-            m.Add(label "(failed: " Snippet(job.error) ")", (*) => 0)
-            m.Disable(label "(failed: " Snippet(job.error) ")")
-        } else
-            m.Add(label Snippet(job.text), PickResult.Bind(job))
+        g.AddText("xm w120 h24 0x200", job.preset.index ". " job.preset.name)
+        row := g.AddText("x+8 w520 h24 0x200 +0x100 +Border", "Working...")
+        row.OnEvent("Click", PreviewUseTone.Bind(A_Index))
+        rows.Push(row)
     }
-    m.Add()
-    m.Add("Cancel", (*) => 0)
+    g.AddButton("xm w90", "Cancel").OnEvent("Click", PreviewClose)
+    g.OnEvent("Close", PreviewClose)
+    g.OnEvent("Escape", PreviewClose)
 
-    PENDING := {original: original, savedClip: savedClip}
-    if hk.isMouse
-        KeyWait(hk.key, "T1")
-    MENU_OPEN := true
-    m.Show()
-    MENU_OPEN := false
-    Sleep(100)
-    if PENDING {  ; dismissed without choosing
-        A_Clipboard := PENDING.savedClip
-        PENDING := ""
+    PREVIEW := {kind: "list", gui: g, jobs: jobs, rows: rows, tip: ""
+        , original: original, savedClip: savedClip, winId: winId}
+    PreviewRefreshRows()
+    ShowNearCursor(g, mx, my)
+    SetTimer(PreviewPoll, 200)
+    SetTimer(PreviewHover, 100)
+}
+
+; Fill each row with the start of its result (or its error)
+PreviewRefreshRows() {
+    for i, job in PREVIEW.jobs {
+        if (job.error != "")
+            PREVIEW.rows[i].Text := "Error: " Snippet(job.error)
+        else if job.done
+            PREVIEW.rows[i].Text := Snippet(job.text)
     }
 }
 
-PickResult(job, *) {
-    global PENDING
-    if !PENDING
+; Show the full text of the row under the mouse as a tooltip
+PreviewHover() {
+    if (!PREVIEW || PREVIEW.kind != "list") {
+        SetTimer(PreviewHover, 0)
         return
-    state := PENDING
-    PENDING := ""
-    PasteText(MatchWhitespace(job.text, state.original), state.savedClip)
+    }
+    MouseGetPos(, , , &hwnd, 2)
+    full := ""
+    for i, row in PREVIEW.rows {
+        if (row.Hwnd = hwnd) {
+            job := PREVIEW.jobs[i]
+            full := job.error != "" ? "Error: " job.error : job.text
+            break
+        }
+    }
+    if (full = PREVIEW.tip)
+        return
+    PREVIEW.tip := full
+    ToolTip(full = "" ? "" : WrapText(full, 80))
+}
+
+; Break long text into lines of about `width` characters (tooltips don't wrap by themselves)
+WrapText(text, width) {
+    out := ""
+    for para in StrSplit(StrReplace(text, "`r`n", "`n"), "`n") {
+        line := ""
+        for word in StrSplit(para, " ") {
+            if (line != "" && StrLen(line) + 1 + StrLen(word) > width) {
+                out .= line "`n"
+                line := word
+            } else
+                line := (line = "") ? word : line " " word
+        }
+        out .= line "`n"
+    }
+    return RTrim(out, "`n")
 }
 
 ; One line, at most 60 characters; & is doubled because menus treat it as a shortcut marker
@@ -340,7 +365,7 @@ RunPreview(hk, *) {
     g.OnEvent("Close", PreviewClose)
     g.OnEvent("Escape", PreviewClose)
 
-    PREVIEW := {gui: g, jobs: jobs, tabs: tabs, edit: edit, use: use, sel: 1
+    PREVIEW := {kind: "tabs", gui: g, jobs: jobs, tabs: tabs, edit: edit, use: use, sel: 1
         , original: original, savedClip: savedClip, winId: winId}
     PreviewSelect(1)
     ShowNearCursor(g, mx, my)
@@ -373,6 +398,10 @@ PreviewActive(*) {
 PreviewSelect(i, *) {
     if !PREVIEW || i > PREVIEW.jobs.Length
         return
+    if (PREVIEW.kind = "list") {  ; the list window has no tabs: the number picks that tone
+        PreviewUseTone(i)
+        return
+    }
     PREVIEW.sel := i
     for j, btn in PREVIEW.tabs {
         name := PREVIEW.jobs[j].preset.index " " PREVIEW.jobs[j].preset.name
@@ -404,18 +433,24 @@ PreviewPoll() {
             changed := true
     }
     if changed
-        PreviewSelect(PREVIEW.sel)
+        (PREVIEW.kind = "list") ? PreviewRefreshRows() : PreviewSelect(PREVIEW.sel)
     if !pending
         SetTimer(PreviewPoll, 0)
 }
 
 PreviewUse(*) {
+    PreviewUseTone(PREVIEW.sel)
+}
+
+; Paste the result of tone i over the selection and close the window
+PreviewUseTone(i, *) {
     global PREVIEW
     state := PREVIEW
-    job := state.jobs[state.sel]
+    job := state.jobs[i]
     if (!job.done || job.error != "")
         return
     PREVIEW := ""
+    ToolTip()
     state.gui.Destroy()
     ; Back to the app the text was selected in, then paste over the selection
     WinActivate(state.winId)
@@ -429,6 +464,7 @@ PreviewClose(*) {
         return
     state := PREVIEW
     PREVIEW := ""
+    ToolTip()
     state.gui.Destroy()
     A_Clipboard := state.savedClip
 }
