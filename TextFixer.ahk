@@ -38,7 +38,10 @@ if (API_URL = "" || MODEL = "") {
 ; (an empty HOTKEY means the tone is only used via the default hotkey).
 ; DEFAULT_HOTKEY (Ctrl+Left click) runs the tone chosen by DEFAULT_PRESET.
 ; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
-; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and lets you pick the result.
+; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and shows the results
+; in a box at the top of the screen (one tab per tone); pick one to replace the selection.
+; RESULTS_MENU_HOTKEY (Ctrl+Shift+Right click) runs every tone at once and pops up the
+; results as a menu at the cursor.
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
 global PRESETS := []
 Loop MAX_PRESETS {
@@ -65,7 +68,9 @@ global DEFAULT_INDEX  := IniRead(CONFIG_FILE, "Settings", "DEFAULT_PRESET", "1")
 global MENU_HOTKEY    := IniRead(CONFIG_FILE, "Settings", "MENU_HOTKEY", "^RButton")
 global DEFAULT_HK     := ""
 global PREVIEW_HOTKEY := IniRead(CONFIG_FILE, "Settings", "PREVIEW_HOTKEY", "^+LButton")
+global RESULTS_HOTKEY := IniRead(CONFIG_FILE, "Settings", "RESULTS_MENU_HOTKEY", "^+RButton")
 global MENU_HK        := ""
+global RESULTS_HK     := ""
 global PREVIEW_HK     := ""
 global PREVIEW := ""  ; state of the open "pick a version" window, if any
 global BUSY := false
@@ -87,6 +92,14 @@ if (MENU_HOTKEY != "")
 
 if (PREVIEW_HOTKEY != "")
     PREVIEW_HK := BindHotkey(PREVIEW_HOTKEY, RunPreview, "[Settings] PREVIEW_HOTKEY")
+if (RESULTS_HOTKEY != "")
+    RESULTS_HK := BindHotkey(RESULTS_HOTKEY, RunResultsMenu, "[Settings] RESULTS_MENU_HOTKEY")
+
+; While the preview box is the active window, 1-9 switch tabs
+HotIf(PreviewActive)
+Loop Min(PRESETS.Length, 9)
+    Hotkey(String(A_Index), PreviewSelect.Bind(A_Index))
+HotIf()
 
 ; Tray menu: pick the default tone (saved to config.ini)
 global DefaultMenu := Menu()
@@ -128,7 +141,9 @@ HotkeySummary() {
     if MENU_HK
         text .= ReadableHotkey(MENU_HK) " = choose a tone from a menu`n"
     if PREVIEW_HK
-        text .= ReadableHotkey(PREVIEW_HK) " = show every tone, then pick one`n"
+        text .= ReadableHotkey(PREVIEW_HK) " = show every tone in a box, then pick one`n"
+    if RESULTS_HK
+        text .= ReadableHotkey(RESULTS_HK) " = show every tone as a menu, then pick one`n"
     for preset in PRESETS
         if preset.HasOwnProp("hk")
             text .= ReadableHotkey(preset.hk) " = " preset.name "`n"
@@ -185,8 +200,113 @@ IsExcludedApp() {
     return false
 }
 
-; Run every tone on the selection at once and show the results in a window;
-; "Use this" pastes the chosen one over the selection
+; Send the selection to every tone at once; PollJob collects the answers
+StartAll(original) {
+    jobs := []
+    for preset in PRESETS {
+        job := {preset: preset, text: "", error: "", done: false, start: A_TickCount}
+        try {
+            job.http := StartRequest(original, preset.prompt, true)
+        } catch as err {
+            job.done := true
+            job.error := err.Message
+        }
+        jobs.Push(job)
+    }
+    return jobs
+}
+
+; Check whether a job's answer has arrived; returns true once it is finished
+PollJob(job) {
+    if job.done
+        return true
+    try ready := job.http.WaitForResponse(0.01)
+    catch
+        ready := false
+    if ready {
+        job.done := true
+        try job.text := Trim(FinishRequest(job.http), " `t`r`n")
+        catch as err
+            job.error := err.Message
+    } else if (A_TickCount - job.start > TIMEOUT_SEC * 1000) {
+        job.done := true
+        job.error := "timed out"
+    }
+    return job.done
+}
+
+; Run every tone and pop the results up as a menu at the cursor
+RunResultsMenu(hk, *) {
+    global BUSY, MENU_OPEN, PENDING
+    if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
+        PassThrough(hk)
+        return
+    }
+    original := CopySelection(&savedClip)
+    if (original = "") {
+        PassThrough(hk)
+        return
+    }
+
+    BUSY := true
+    ToolTip("Running all tones...")
+    jobs := StartAll(original)
+    Loop {
+        waiting := false
+        for job in jobs
+            if !PollJob(job)
+                waiting := true
+        if !waiting
+            break
+        Sleep(100)
+    }
+    ToolTip()
+    BUSY := false
+
+    m := Menu()
+    for job in jobs {
+        label := job.preset.index ". " job.preset.name ":  "
+        if (job.error != "") {
+            m.Add(label "(failed: " Snippet(job.error) ")", (*) => 0)
+            m.Disable(label "(failed: " Snippet(job.error) ")")
+        } else
+            m.Add(label Snippet(job.text), PickResult.Bind(job))
+    }
+    m.Add()
+    m.Add("Cancel", (*) => 0)
+
+    PENDING := {original: original, savedClip: savedClip}
+    if hk.isMouse
+        KeyWait(hk.key, "T1")
+    MENU_OPEN := true
+    m.Show()
+    MENU_OPEN := false
+    Sleep(100)
+    if PENDING {  ; dismissed without choosing
+        A_Clipboard := PENDING.savedClip
+        PENDING := ""
+    }
+}
+
+PickResult(job, *) {
+    global PENDING
+    if !PENDING
+        return
+    state := PENDING
+    PENDING := ""
+    PasteText(MatchWhitespace(job.text, state.original), state.savedClip)
+}
+
+; One line, at most 60 characters; & is doubled because menus treat it as a shortcut marker
+Snippet(text) {
+    text := Trim(RegExReplace(text, "\s+", " "))
+    if (StrLen(text) > 60)
+        text := SubStr(text, 1, 57) "..."
+    return StrReplace(text, "&", "&&")
+}
+
+; Run every tone and show the results in a box at the top of the screen, one tab
+; per tone; "Use this" pastes the shown version over the selection
 RunPreview(hk, *) {
     global PREVIEW
     if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
@@ -200,30 +320,53 @@ RunPreview(hk, *) {
     }
 
     winId := WinExist("A")
-    g := Gui("+AlwaysOnTop", "TextFixer - pick a version")
+    width := 660
+    g := Gui("+AlwaysOnTop +ToolWindow", "TextFixer - 1-" PRESETS.Length " or click a tab, Enter to use")
     g.SetFont("s10")
-    jobs := []
-    for preset in PRESETS {
-        g.AddText("xm w540", preset.index ". " preset.name)
-        edit := g.AddEdit("xm w440 r3 ReadOnly +VScroll", "Working...")
-        btn := g.AddButton("x+8 w90 Disabled", "Use this")
-        job := {preset: preset, edit: edit, btn: btn, done: false, start: A_TickCount}
-        try {
-            job.http := StartRequest(original, preset.prompt, true)
-        } catch as err {
-            job.done := true
-            edit.Value := "Error: " err.Message
-        }
-        btn.OnEvent("Click", PreviewUse.Bind(job))
-        jobs.Push(job)
+    jobs := StartAll(original)
+    tabs := []
+    btnWidth := Min(130, (width - 4 * (PRESETS.Length - 1)) // PRESETS.Length)
+    for job in jobs {
+        btn := g.AddButton((A_Index = 1 ? "xm" : "x+4") " w" btnWidth, "")
+        btn.OnEvent("Click", PreviewSelect.Bind(A_Index))
+        tabs.Push(btn)
     }
-    g.AddButton("xm w90", "Cancel").OnEvent("Click", PreviewClose)
+    edit := g.AddEdit("xm w" width " r4 ReadOnly +VScroll", "")
+    use := g.AddButton("xm w110 Default", "Use this")
+    use.OnEvent("Click", PreviewUse)
+    g.AddButton("x+8 w90", "Cancel").OnEvent("Click", PreviewClose)
     g.OnEvent("Close", PreviewClose)
     g.OnEvent("Escape", PreviewClose)
 
-    PREVIEW := {gui: g, jobs: jobs, original: original, savedClip: savedClip, winId: winId}
-    g.Show()
+    PREVIEW := {gui: g, jobs: jobs, tabs: tabs, edit: edit, use: use, sel: 1
+        , original: original, savedClip: savedClip, winId: winId}
+    PreviewSelect(1)
+    g.Show("y10 x" ((A_ScreenWidth - width - 24) // 2))
     SetTimer(PreviewPoll, 200)
+}
+
+PreviewActive(*) {
+    return PREVIEW && WinActive("ahk_id " PREVIEW.gui.Hwnd)
+}
+
+; Show tab i: its text (or error / "Working...") and mark it as the selected one
+PreviewSelect(i, *) {
+    if !PREVIEW || i > PREVIEW.jobs.Length
+        return
+    PREVIEW.sel := i
+    for j, btn in PREVIEW.tabs {
+        name := PREVIEW.jobs[j].preset.index " " PREVIEW.jobs[j].preset.name
+        btn.Text := (j = i) ? "[" name "]" : name
+    }
+    job := PREVIEW.jobs[i]
+    if (job.error != "")
+        text := "Error: " job.error
+    else if job.done
+        text := job.text
+    else
+        text := "Working..."
+    PREVIEW.edit.Value := StrReplace(StrReplace(text, "`r`n", "`n"), "`n", "`r`n")  ; Edit controls need CRLF
+    PREVIEW.use.Enabled := job.done && job.error = ""
 }
 
 PreviewPoll() {
@@ -231,41 +374,33 @@ PreviewPoll() {
         SetTimer(PreviewPoll, 0)
         return
     }
-    pending := 0
+    pending := false
+    changed := false
     for job in PREVIEW.jobs {
-        if job.done
-            continue
-        try ready := job.http.WaitForResponse(0.01)
-        catch
-            ready := false
-        if ready {
-            job.done := true
-            try {
-                text := Trim(FinishRequest(job.http), " `t`r`n")
-                job.edit.Value := StrReplace(StrReplace(text, "`r`n", "`n"), "`n", "`r`n")  ; Edit controls need CRLF
-                job.btn.Enabled := true
-            } catch as err {
-                job.edit.Value := "Error: " err.Message
-            }
-        } else if (A_TickCount - job.start > TIMEOUT_SEC * 1000) {
-            job.done := true
-            job.edit.Value := "Error: timed out"
-        } else
-            pending++
+        was := job.done
+        if !PollJob(job)
+            pending := true
+        else if !was
+            changed := true
     }
-    if (pending = 0)
+    if changed
+        PreviewSelect(PREVIEW.sel)
+    if !pending
         SetTimer(PreviewPoll, 0)
 }
 
-PreviewUse(job, *) {
+PreviewUse(*) {
     global PREVIEW
     state := PREVIEW
+    job := state.jobs[state.sel]
+    if (!job.done || job.error != "")
+        return
     PREVIEW := ""
     state.gui.Destroy()
     ; Back to the app the text was selected in, then paste over the selection
     WinActivate(state.winId)
     WinWaitActive(state.winId, , 2)
-    PasteText(MatchWhitespace(job.edit.Value, state.original), state.savedClip)
+    PasteText(MatchWhitespace(job.text, state.original), state.savedClip)
 }
 
 PreviewClose(*) {
