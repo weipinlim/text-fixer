@@ -25,6 +25,7 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
 1. Select text in any app (email, Word, browser, chat…).
 2. Hold **Ctrl** and **left-click** the selection to rewrite it in your **default tone**,
    **Ctrl+right-click** to pick any tone from a menu at the cursor,
+   **Ctrl+Shift+left-click** to see every tone's result side by side and pick one,
    or press a tone hotkey:
 
    | Hotkey | Tone         | What it does                                              |
@@ -60,6 +61,10 @@ for Ctrl+Alt+D). Leave it empty to turn it off.
 
 The tone menu opens with `MENU_HOTKEY` (default `^RButton`, Ctrl+Right click). Change or empty it
 the same way. If nothing is selected, the right-click goes to the app as normal.
+
+`PREVIEW_HOTKEY` (default `^+LButton`, Ctrl+Shift+Left click) sends the selection to every tone at
+the same time and opens a window with all the results. Click **Use this** under the one you want to
+replace your selection with it, or **Cancel** to leave the text alone.
 
 ## Changing tones and hotkeys
 

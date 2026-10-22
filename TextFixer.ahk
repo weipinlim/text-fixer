@@ -38,6 +38,7 @@ if (API_URL = "" || MODEL = "") {
 ; (an empty HOTKEY means the tone is only used via the default hotkey).
 ; DEFAULT_HOTKEY (Ctrl+Left click) runs the tone chosen by DEFAULT_PRESET.
 ; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
+; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and lets you pick the result.
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
 global PRESETS := []
 Loop MAX_PRESETS {
@@ -63,7 +64,10 @@ global DEFAULT_HOTKEY := IniRead(CONFIG_FILE, "Settings", "DEFAULT_HOTKEY", "^LB
 global DEFAULT_INDEX  := IniRead(CONFIG_FILE, "Settings", "DEFAULT_PRESET", "1")
 global MENU_HOTKEY    := IniRead(CONFIG_FILE, "Settings", "MENU_HOTKEY", "^RButton")
 global DEFAULT_HK     := ""
+global PREVIEW_HOTKEY := IniRead(CONFIG_FILE, "Settings", "PREVIEW_HOTKEY", "^+LButton")
 global MENU_HK        := ""
+global PREVIEW_HK     := ""
+global PREVIEW := ""  ; state of the open "pick a version" window, if any
 global BUSY := false
 global MENU_OPEN := false
 global PENDING := ""  ; selection waiting for a pick from the tone menu
@@ -80,6 +84,9 @@ for preset in PRESETS
     ToneMenu.Add(preset.index ". " preset.name, PickTone.Bind(preset))
 if (MENU_HOTKEY != "")
     MENU_HK := BindHotkey(MENU_HOTKEY, RunMenu, "[Settings] MENU_HOTKEY")
+
+if (PREVIEW_HOTKEY != "")
+    PREVIEW_HK := BindHotkey(PREVIEW_HOTKEY, RunPreview, "[Settings] PREVIEW_HOTKEY")
 
 ; Tray menu: pick the default tone (saved to config.ini)
 global DefaultMenu := Menu()
@@ -120,6 +127,8 @@ HotkeySummary() {
     text := DEFAULT_HK ? ReadableHotkey(DEFAULT_HK) " = " DefaultPreset().name " (default)`n" : ""
     if MENU_HK
         text .= ReadableHotkey(MENU_HK) " = choose a tone from a menu`n"
+    if PREVIEW_HK
+        text .= ReadableHotkey(PREVIEW_HK) " = show every tone, then pick one`n"
     for preset in PRESETS
         if preset.HasOwnProp("hk")
             text .= ReadableHotkey(preset.hk) " = " preset.name "`n"
@@ -176,6 +185,99 @@ IsExcludedApp() {
     return false
 }
 
+; Run every tone on the selection at once and show the results in a window;
+; "Use this" pastes the chosen one over the selection
+RunPreview(hk, *) {
+    global PREVIEW
+    if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
+        PassThrough(hk)
+        return
+    }
+    original := CopySelection(&savedClip)
+    if (original = "") {
+        PassThrough(hk)
+        return
+    }
+
+    winId := WinExist("A")
+    g := Gui("+AlwaysOnTop", "TextFixer - pick a version")
+    g.SetFont("s10")
+    jobs := []
+    for preset in PRESETS {
+        g.AddText("xm w540", preset.index ". " preset.name)
+        edit := g.AddEdit("xm w440 r3 ReadOnly +VScroll", "Working...")
+        btn := g.AddButton("x+8 w90 Disabled", "Use this")
+        job := {preset: preset, edit: edit, btn: btn, done: false, start: A_TickCount}
+        try {
+            job.http := StartRequest(original, preset.prompt, true)
+        } catch as err {
+            job.done := true
+            edit.Value := "Error: " err.Message
+        }
+        btn.OnEvent("Click", PreviewUse.Bind(job))
+        jobs.Push(job)
+    }
+    g.AddButton("xm w90", "Cancel").OnEvent("Click", PreviewClose)
+    g.OnEvent("Close", PreviewClose)
+    g.OnEvent("Escape", PreviewClose)
+
+    PREVIEW := {gui: g, jobs: jobs, original: original, savedClip: savedClip, winId: winId}
+    g.Show()
+    SetTimer(PreviewPoll, 200)
+}
+
+PreviewPoll() {
+    if !PREVIEW {
+        SetTimer(PreviewPoll, 0)
+        return
+    }
+    pending := 0
+    for job in PREVIEW.jobs {
+        if job.done
+            continue
+        try ready := job.http.WaitForResponse(0.01)
+        catch
+            ready := false
+        if ready {
+            job.done := true
+            try {
+                text := Trim(FinishRequest(job.http), " `t`r`n")
+                job.edit.Value := StrReplace(StrReplace(text, "`r`n", "`n"), "`n", "`r`n")  ; Edit controls need CRLF
+                job.btn.Enabled := true
+            } catch as err {
+                job.edit.Value := "Error: " err.Message
+            }
+        } else if (A_TickCount - job.start > TIMEOUT_SEC * 1000) {
+            job.done := true
+            job.edit.Value := "Error: timed out"
+        } else
+            pending++
+    }
+    if (pending = 0)
+        SetTimer(PreviewPoll, 0)
+}
+
+PreviewUse(job, *) {
+    global PREVIEW
+    state := PREVIEW
+    PREVIEW := ""
+    state.gui.Destroy()
+    ; Back to the app the text was selected in, then paste over the selection
+    WinActivate(state.winId)
+    WinWaitActive(state.winId, , 2)
+    PasteText(MatchWhitespace(job.edit.Value, state.original), state.savedClip)
+}
+
+PreviewClose(*) {
+    global PREVIEW
+    if !PREVIEW
+        return
+    state := PREVIEW
+    PREVIEW := ""
+    state.gui.Destroy()
+    A_Clipboard := state.savedClip
+}
+
 ; Copy the selection; if no text gets copied (nothing selected, or files
 ; selected in Explorer), return "" so the caller lets the app handle the key/click
 CopySelection(&savedClip) {
@@ -190,7 +292,7 @@ CopySelection(&savedClip) {
 }
 
 RunPreset(preset, hk, *) {
-    if (BUSY || MENU_OPEN || IsExcludedApp()) {
+    if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
         PassThrough(hk)
         return
     }
@@ -205,7 +307,7 @@ RunPreset(preset, hk, *) {
 ; Show the tone menu at the cursor; the chosen tone is applied by PickTone
 RunMenu(hk, *) {
     global MENU_OPEN, PENDING
-    if (BUSY || MENU_OPEN || IsExcludedApp()) {
+    if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
         PassThrough(hk)
         return
     }
@@ -253,21 +355,34 @@ ApplyTone(preset, original, savedClip) {
     }
     ToolTip()
 
-    ; Keep the original trailing whitespace/newline and use Windows line endings
+    PasteText(MatchWhitespace(fixed, original), savedClip)
+    BUSY := false
+}
+
+; Keep the original trailing whitespace/newline and use Windows line endings
+MatchWhitespace(fixed, original) {
     fixed := Trim(fixed, " `t`r`n")
     if RegExMatch(original, "\s+$", &tail)
         fixed .= tail[0]
-    fixed := StrReplace(StrReplace(fixed, "`r`n", "`n"), "`n", "`r`n")
+    return StrReplace(StrReplace(fixed, "`r`n", "`n"), "`n", "`r`n")
+}
 
-    A_Clipboard := fixed
+; Paste text over the selection, then put the user's clipboard back
+PasteText(text, savedClip) {
+    A_Clipboard := text
     ClipWait(1)
     Send("^v")
     Sleep(500)
     A_Clipboard := savedClip
-    BUSY := false
 }
 
 CallLLM(text, prompt) {
+    return FinishRequest(StartRequest(text, prompt, false))
+}
+
+; Send the chat request; with async=true it returns at once and FinishRequest
+; reads the answer after http.WaitForResponse() reports it has arrived
+StartRequest(text, prompt, async) {
     body := '{"model":' JsonEscape(MODEL)
         . ',"messages":[{"role":"system","content":' JsonEscape(prompt) '}'
         . ',{"role":"user","content":' JsonEscape(text) '}]'
@@ -275,12 +390,15 @@ CallLLM(text, prompt) {
 
     http := ComObject("WinHttp.WinHttpRequest.5.1")
     http.SetTimeouts(5000, 5000, 30000, TIMEOUT_SEC * 1000)
-    http.Open("POST", API_URL, false)
+    http.Open("POST", API_URL, async)
     http.SetRequestHeader("Content-Type", "application/json")
     if (API_KEY != "")
         http.SetRequestHeader("Authorization", "Bearer " API_KEY)
     http.Send(body)
+    return http
+}
 
+FinishRequest(http) {
     response := ReadUtf8Body(http)
     if (http.Status != 200)
         throw Error("HTTP " http.Status "`n" SubStr(response, 1, 500))
