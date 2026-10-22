@@ -65,9 +65,9 @@ global BUSY := false
 
 for preset in PRESETS
     if (preset.hotkey != "")
-        preset.hk := BindHotkey(preset.hotkey, RunPreset.Bind(preset))
+        preset.hk := BindHotkey(preset.hotkey, RunPreset.Bind(preset), "[Preset" preset.index "] HOTKEY")
 if (DEFAULT_HOTKEY != "")
-    DEFAULT_HK := BindHotkey(DEFAULT_HOTKEY, (hk, *) => RunPreset(DefaultPreset(), hk))
+    DEFAULT_HK := BindHotkey(DEFAULT_HOTKEY, (hk, *) => RunPreset(DefaultPreset(), hk), "[Settings] DEFAULT_HOTKEY")
 
 ; Tray menu: pick the default tone (saved to config.ini)
 global DefaultMenu := Menu()
@@ -113,7 +113,7 @@ HotkeySummary() {
 }
 
 ; Register a hotkey; returns its parsed form (modifiers + key) for pass-through
-BindHotkey(hotkey, callback) {
+BindHotkey(hotkey, callback, where) {
     RegExMatch(hotkey, "^([~$*<>^!+#]*)(.+)$", &m)
     hk := {mods: RegExReplace(m[1], "[~$*<>]"), key: m[2]}
     hk.isMouse := RegExMatch(hk.key, "i)^(LButton|RButton|MButton|XButton1|XButton2)$")
@@ -121,8 +121,8 @@ BindHotkey(hotkey, callback) {
     ; (mouse hotkeys always use the hook)
     key := (hk.isMouse || InStr(hotkey, "$")) ? hotkey : "$" hotkey
     try Hotkey(key, callback.Bind(hk))
-    catch {
-        MsgBox("Invalid hotkey in config.ini: " hotkey, "TextFixer", "Icon!")
+    catch as err {
+        MsgBox("Invalid hotkey in config.ini`n`n" where "=" hotkey "`n`n" err.Message, "TextFixer", "Icon!")
         ExitApp
     }
     return hk
