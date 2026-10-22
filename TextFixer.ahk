@@ -37,6 +37,7 @@ if (API_URL = "" || MODEL = "") {
 ; Tone presets: [Preset1] .. [Preset9], each with NAME, HOTKEY and PROMPT
 ; (an empty HOTKEY means the tone is only used via the default hotkey).
 ; DEFAULT_HOTKEY (Ctrl+Left click) runs the tone chosen by DEFAULT_PRESET.
+; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
 global PRESETS := []
 Loop MAX_PRESETS {
@@ -60,14 +61,25 @@ if (PRESETS.Length = 0) {
 
 global DEFAULT_HOTKEY := IniRead(CONFIG_FILE, "Settings", "DEFAULT_HOTKEY", "^LButton")
 global DEFAULT_INDEX  := IniRead(CONFIG_FILE, "Settings", "DEFAULT_PRESET", "1")
+global MENU_HOTKEY    := IniRead(CONFIG_FILE, "Settings", "MENU_HOTKEY", "^RButton")
 global DEFAULT_HK     := ""
+global MENU_HK        := ""
 global BUSY := false
+global MENU_OPEN := false
+global PENDING := ""  ; selection waiting for a pick from the tone menu
 
 for preset in PRESETS
     if (preset.hotkey != "")
         preset.hk := BindHotkey(preset.hotkey, RunPreset.Bind(preset), "[Preset" preset.index "] HOTKEY")
 if (DEFAULT_HOTKEY != "")
     DEFAULT_HK := BindHotkey(DEFAULT_HOTKEY, (hk, *) => RunPreset(DefaultPreset(), hk), "[Settings] DEFAULT_HOTKEY")
+
+; Tone menu: MENU_HOTKEY (Ctrl+Right click) pops up a list of tones at the cursor
+global ToneMenu := Menu()
+for preset in PRESETS
+    ToneMenu.Add(preset.index ". " preset.name, PickTone.Bind(preset))
+if (MENU_HOTKEY != "")
+    MENU_HK := BindHotkey(MENU_HOTKEY, RunMenu, "[Settings] MENU_HOTKEY")
 
 ; Tray menu: pick the default tone (saved to config.ini)
 global DefaultMenu := Menu()
@@ -106,6 +118,8 @@ UpdateDefaultMenu() {
 
 HotkeySummary() {
     text := DEFAULT_HK ? ReadableHotkey(DEFAULT_HK) " = " DefaultPreset().name " (default)`n" : ""
+    if MENU_HK
+        text .= ReadableHotkey(MENU_HK) " = choose a tone from a menu`n"
     for preset in PRESETS
         if preset.HasOwnProp("hk")
             text .= ReadableHotkey(preset.hk) " = " preset.name "`n"
@@ -162,25 +176,70 @@ IsExcludedApp() {
     return false
 }
 
-RunPreset(preset, hk, *) {
-    global BUSY
-    if (BUSY || IsExcludedApp()) {
-        PassThrough(hk)
-        return
-    }
-
-    ; Copy the selection; if no text gets copied (nothing selected, or files
-    ; selected in Explorer), let the app handle the key/click normally
+; Copy the selection; if no text gets copied (nothing selected, or files
+; selected in Explorer), return "" so the caller lets the app handle the key/click
+CopySelection(&savedClip) {
     savedClip := ClipboardAll()
     A_Clipboard := ""
     Send("^c")
     if !ClipWait(SELECTION_MS / 1000) || DllCall("IsClipboardFormatAvailable", "UInt", 15) {  ; 15 = CF_HDROP
         A_Clipboard := savedClip
+        return ""
+    }
+    return A_Clipboard
+}
+
+RunPreset(preset, hk, *) {
+    if (BUSY || MENU_OPEN || IsExcludedApp()) {
         PassThrough(hk)
         return
     }
-    original := A_Clipboard
+    original := CopySelection(&savedClip)
+    if (original = "") {
+        PassThrough(hk)
+        return
+    }
+    ApplyTone(preset, original, savedClip)
+}
 
+; Show the tone menu at the cursor; the chosen tone is applied by PickTone
+RunMenu(hk, *) {
+    global MENU_OPEN, PENDING
+    if (BUSY || MENU_OPEN || IsExcludedApp()) {
+        PassThrough(hk)
+        return
+    }
+    original := CopySelection(&savedClip)
+    if (original = "") {
+        PassThrough(hk)
+        return
+    }
+    PENDING := {original: original, savedClip: savedClip}
+    ; Let go of the mouse button first so releasing it doesn't pick a menu item
+    if hk.isMouse
+        KeyWait(hk.key, "T1")
+    MENU_OPEN := true
+    ToneMenu.Show()
+    MENU_OPEN := false
+    ; The menu's callback runs as its own thread; give it a moment to claim PENDING
+    Sleep(100)
+    if PENDING {  ; dismissed without choosing
+        A_Clipboard := PENDING.savedClip
+        PENDING := ""
+    }
+}
+
+PickTone(preset, *) {
+    global PENDING
+    if !PENDING
+        return
+    job := PENDING
+    PENDING := ""
+    ApplyTone(preset, job.original, job.savedClip)
+}
+
+ApplyTone(preset, original, savedClip) {
+    global BUSY
     BUSY := true
     ToolTip(preset.name "...")
     try {
