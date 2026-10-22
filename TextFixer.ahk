@@ -28,6 +28,13 @@ if !IsInteger(TIMEOUT_SEC)
     TIMEOUT_SEC := 60
 if !IsInteger(SELECTION_MS)
     SELECTION_MS := 300
+global EXPLAIN_SECONDS := IniRead(CONFIG_FILE, "Settings", "EXPLAIN_SECONDS", "30")
+if !IsInteger(EXPLAIN_SECONDS)
+    EXPLAIN_SECONDS := 30
+global EXPLAIN_PROMPT := IniRead(CONFIG_FILE, "Settings", "EXPLAIN_PROMPT", "")
+if (EXPLAIN_PROMPT = "")
+    EXPLAIN_PROMPT := "Explain the selected word, phrase or text briefly and simply, in the same language as the text. For a word, give its meaning and one short example sentence. Keep it under 80 words. Return only the explanation."
+EXPLAIN_PROMPT := StrReplace(EXPLAIN_PROMPT, "\n", "`n")
 
 if (API_URL = "" || MODEL = "") {
     MsgBox("API_URL and MODEL must be set in config.ini.", "TextFixer", "Icon!")
@@ -40,6 +47,8 @@ if (API_URL = "" || MODEL = "") {
 ; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
 ; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and shows the results
 ; in a box next to the cursor (one tab per tone); pick one to replace the selection.
+; EXPLAIN_HOTKEY (Ctrl+Middle click) explains the selected word or text in a tooltip
+; (nothing is replaced).
 ; RESULTS_MENU_HOTKEY (Ctrl+Shift+Right click) runs every tone at once and lists the
 ; results in one window at the cursor (hover for the full text, click to use).
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
@@ -68,6 +77,9 @@ global DEFAULT_INDEX  := IniRead(CONFIG_FILE, "Settings", "DEFAULT_PRESET", "1")
 global MENU_HOTKEY    := IniRead(CONFIG_FILE, "Settings", "MENU_HOTKEY", "^RButton")
 global DEFAULT_HK     := ""
 global PREVIEW_HOTKEY := IniRead(CONFIG_FILE, "Settings", "PREVIEW_HOTKEY", "^+LButton")
+global EXPLAIN_HOTKEY := IniRead(CONFIG_FILE, "Settings", "EXPLAIN_HOTKEY", "^MButton")
+global EXPLAIN_HK     := ""
+global EXPLAIN_START  := 0  ; tick count while an explanation tooltip is showing
 global RESULTS_HOTKEY := IniRead(CONFIG_FILE, "Settings", "RESULTS_MENU_HOTKEY", "^+RButton")
 global MENU_HK        := ""
 global RESULTS_HK     := ""
@@ -94,6 +106,9 @@ if (PREVIEW_HOTKEY != "")
     PREVIEW_HK := BindHotkey(PREVIEW_HOTKEY, RunPreview, "[Settings] PREVIEW_HOTKEY")
 if (RESULTS_HOTKEY != "")
     RESULTS_HK := BindHotkey(RESULTS_HOTKEY, RunResultsMenu, "[Settings] RESULTS_MENU_HOTKEY")
+
+if (EXPLAIN_HOTKEY != "")
+    EXPLAIN_HK := BindHotkey(EXPLAIN_HOTKEY, RunExplain, "[Settings] EXPLAIN_HOTKEY")
 
 ; While the preview box is the active window, 1-9 switch tabs
 HotIf(PreviewActive)
@@ -142,6 +157,8 @@ HotkeySummary() {
         text .= ReadableHotkey(MENU_HK) " = choose a tone from a menu`n"
     if PREVIEW_HK
         text .= ReadableHotkey(PREVIEW_HK) " = show every tone in a box, then pick one`n"
+    if EXPLAIN_HK
+        text .= ReadableHotkey(EXPLAIN_HK) " = explain the selected word in a tooltip`n"
     if RESULTS_HK
         text .= ReadableHotkey(RESULTS_HK) " = show every tone as a menu, then pick one`n"
     for preset in PRESETS
@@ -467,6 +484,50 @@ PreviewClose(*) {
     ToolTip()
     state.gui.Destroy()
     A_Clipboard := state.savedClip
+}
+
+; Ask the LLM to explain the selected word or text and show the answer in a tooltip
+; (nothing is replaced); the tooltip goes away on a click, Esc or after EXPLAIN_SECONDS
+RunExplain(hk, *) {
+    global BUSY, EXPLAIN_START
+    if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
+        PassThrough(hk)
+        return
+    }
+    original := CopySelection(&savedClip)
+    if (original = "") {
+        PassThrough(hk)
+        return
+    }
+    A_Clipboard := savedClip
+    if hk.isMouse
+        KeyWait(hk.key, "T2")
+
+    SetTimer(ExplainWatch, 0)
+    BUSY := true
+    ToolTip("Explaining...")
+    try {
+        answer := CallLLM(original, EXPLAIN_PROMPT)
+    } catch as err {
+        ToolTip()
+        BUSY := false
+        MsgBox("Request failed:`n`n" err.Message, "TextFixer", "Iconx")
+        return
+    }
+    BUSY := false
+    ToolTip(WrapText(Trim(answer, " `t`r`n"), 70))
+    EXPLAIN_START := A_TickCount
+    SetTimer(ExplainWatch, 100)
+}
+
+ExplainWatch() {
+    global EXPLAIN_START
+    if (A_TickCount - EXPLAIN_START > EXPLAIN_SECONDS * 1000
+        || GetKeyState("Escape", "P") || GetKeyState("LButton", "P")
+        || GetKeyState("RButton", "P") || GetKeyState("MButton", "P")) {
+        ToolTip()
+        SetTimer(ExplainWatch, 0)
+    }
 }
 
 ; Copy the selection; if no text gets copied (nothing selected, or files

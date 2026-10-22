@@ -75,6 +75,14 @@ Two hotkeys run **every tone at once** so you can compare before choosing:
 
 Leave either setting empty to turn it off.
 
+## Explaining a word
+
+Select a word, phrase or sentence you don't understand and **Ctrl+middle-click** it
+(`EXPLAIN_HOTKEY`, default `^MButton`). TextFixer asks the LLM to explain it and shows the answer
+in a tooltip next to the cursor. Nothing in your document is changed. Click anywhere, press Esc, or
+wait `EXPLAIN_SECONDS` (default 30) to dismiss it. To change what the LLM is asked, set
+`EXPLAIN_PROMPT` in `[Settings]`. If nothing is selected, the middle click goes to the app as normal.
+
 ## Changing tones and hotkeys
 
 Each tone has its own section in `config.ini`:
