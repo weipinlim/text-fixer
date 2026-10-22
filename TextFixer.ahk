@@ -39,7 +39,7 @@ if (API_URL = "" || MODEL = "") {
 ; DEFAULT_HOTKEY (Ctrl+Left click) runs the tone chosen by DEFAULT_PRESET.
 ; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
 ; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and shows the results
-; in a box at the top of the screen (one tab per tone); pick one to replace the selection.
+; in a box next to the cursor (one tab per tone); pick one to replace the selection.
 ; RESULTS_MENU_HOTKEY (Ctrl+Shift+Right click) runs every tone at once and pops up the
 ; results as a menu at the cursor.
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
@@ -305,7 +305,7 @@ Snippet(text) {
     return StrReplace(text, "&", "&&")
 }
 
-; Run every tone and show the results in a box at the top of the screen, one tab
+; Run every tone and show the results in a box next to the cursor, one tab
 ; per tone; "Use this" pastes the shown version over the selection
 RunPreview(hk, *) {
     global PREVIEW
@@ -320,6 +320,8 @@ RunPreview(hk, *) {
     }
 
     winId := WinExist("A")
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
     width := 660
     g := Gui("+AlwaysOnTop +ToolWindow", "TextFixer - 1-" PRESETS.Length " or click a tab, Enter to use")
     g.SetFont("s10")
@@ -341,8 +343,26 @@ RunPreview(hk, *) {
     PREVIEW := {gui: g, jobs: jobs, tabs: tabs, edit: edit, use: use, sel: 1
         , original: original, savedClip: savedClip, winId: winId}
     PreviewSelect(1)
-    g.Show("y10 x" ((A_ScreenWidth - width - 24) // 2))
+    ShowNearCursor(g, mx, my)
     SetTimer(PreviewPoll, 200)
+}
+
+; Show a window just below-right of the cursor, kept inside the screen it is on
+; (above the cursor if there is no room below)
+ShowNearCursor(g, mx, my) {
+    g.Show("Hide")
+    g.GetPos(, , &w, &h)
+    left := 0, top := 0, right := A_ScreenWidth, bottom := A_ScreenHeight
+    Loop MonitorGetCount() {
+        MonitorGetWorkArea(A_Index, &l, &t, &r, &b)
+        if (mx >= l && mx < r && my >= t && my < b) {
+            left := l, top := t, right := r, bottom := b
+            break
+        }
+    }
+    x := Max(left, Min(mx + 10, right - w))
+    y := (my + 20 + h <= bottom) ? my + 20 : Max(top, my - 10 - h)
+    g.Show("x" x " y" y)
 }
 
 PreviewActive(*) {
