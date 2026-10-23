@@ -1,13 +1,12 @@
 # Builds TextFixer-Setup.exe (Python app + Ollama + model download) on Windows.
-# Runs on pushes that change the Python app, on demand, and for tags like v1.0.0
-# (then the installer is attached to a GitHub release).
+# Runs on pushes that change the Python app, on demand (Actions tab > Windows installer >
+# Run workflow), and for tags like v1.0.0 (then the installer is attached to a GitHub release).
 name: Windows installer
 
 on:
   push:
     paths:
       - "python/**"
-      - ".github/workflows/installer.yml"
     tags:
       - "v*"
   workflow_dispatch:
