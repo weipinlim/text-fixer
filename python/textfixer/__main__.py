@@ -1,4 +1,4 @@
-"""python -m textfixer [run|check]"""
+"""python -m textfixer [run|check|setup]"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 from .config import Config, ensure_config
@@ -49,6 +50,16 @@ def cmd_check(args) -> int:
     return 1
 
 
+def cmd_setup(args) -> int:
+    from .setup_cmd import DEFAULT_MODELS, run_setup
+
+    cfg, _ = load_config(args.config)
+    code = run_setup(cfg, args.model or DEFAULT_MODELS, args.wait)
+    if args.pause:  # keep the installer's console window open long enough to read the result
+        time.sleep(4 if code == 0 else 30)
+    return code
+
+
 def cmd_run(args) -> int:
     from .app import App
     from .tray import start_tray
@@ -75,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="start the app (default)")
     sub.add_parser("check", help="is Ollama running and the model installed?")
+    setup = sub.add_parser("setup", help="start Ollama, download the model and write config.ini (used by the installer)")
+    setup.add_argument("--model", action="append", help="model to download; repeat to give fallbacks (default: Qwen3 4B instruct)")
+    setup.add_argument("--wait", type=float, default=120, help="seconds to wait for Ollama to start")
+    setup.add_argument("--pause", action="store_true", help="wait a moment before closing (installer)")
     args = parser.parse_args(argv)
 
     level = logging.DEBUG if args.verbose else logging.INFO
@@ -84,7 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logging.basicConfig(level=level, format=fmt)
 
-    return cmd_check(args) if args.command == "check" else cmd_run(args)
+    if args.command == "check":
+        return cmd_check(args)
+    if args.command == "setup":
+        return cmd_setup(args)
+    return cmd_run(args)
 
 
 if __name__ == "__main__":

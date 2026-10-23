@@ -49,7 +49,7 @@ class MockHandler(BaseHTTPRequestHandler):
         if self.path == "/api/pull":
             self.send_response(200)
             self.end_headers()
-            if body["model"] == "broken":
+            if body["model"].startswith("broken"):
                 self.wfile.write(b'{"error": "pull model manifest: file does not exist"}\n')
                 return
             for status, done in (("pulling manifest", None), ("pulling abc", 50), ("pulling abc", 100), ("success", None)):
@@ -58,7 +58,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     event.update(total=100, completed=done)
                 self.wfile.write((json.dumps(event) + "\n").encode())
                 self.wfile.flush()
-            self.server.installed.append(body["model"] + ":latest")
+            self.server.installed.append(body["model"] if ":" in body["model"] else body["model"] + ":latest")
             return
         if self.path != "/api/chat":
             return self._send(404, {"error": "not found"})

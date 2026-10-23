@@ -17,7 +17,38 @@ Gemini). It does the same things as the [AutoHotkey version](../README.md) and u
 > replaces it with Ollama: Ollama is the model server, so there is no local API server, device
 > choice or model conversion to deal with.
 
-## Install
+## One-click install (for most people)
+
+Download **`TextFixer-Setup.exe`** from the repository's **Releases** page and double-click it. It
+installs everything, with no admin rights needed:
+
+1. TextFixer (in your user folder, with a Start Menu entry, and optionally started with Windows)
+2. **Ollama**, if it is not installed yet (the official installer from Ollama's GitHub releases)
+3. The AI model, **Qwen3 4B instruct** (about 2.5 GB; a window shows the download progress)
+
+When it finishes, TextFixer is running: select text anywhere and press `Ctrl+1`. The installer is
+not code-signed, so Windows SmartScreen may say "Windows protected your PC": click **More info** >
+**Run anyway** if you trust where you downloaded it from.
+
+Uninstalling (Settings > Apps, or the Start Menu) removes TextFixer. Ollama and the model stay, since
+other programs may use them; remove them from Settings > Apps and with `ollama rm <model>` if you want.
+
+### Making a release (for the maintainer)
+
+The installer is built by GitHub Actions (`.github/workflows/installer.yml`) on a Windows machine:
+every push that changes `python/` builds it (download it from the run's **Artifacts**), and pushing a
+tag such as `v1.0.0` also attaches it to a GitHub release:
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The model the installer downloads is set in `textfixer/setup_cmd.py` (`DEFAULT_MODELS`): it tries
+the names in order and uses the first one Ollama can download. `TextFixerCLI.exe setup` does the
+same by hand (start Ollama, download the model, write `config.ini`).
+
+## Install by hand (developers)
 
 1. Install **Ollama** from https://ollama.com/download and start it (it runs in the background).
 2. Install **Python 3.10 or newer** from python.org (it includes tkinter).
