@@ -85,6 +85,26 @@ can use the same model.
 
 To run without a console window, use `pythonw -m textfixer`, or tray menu → **Start with Windows**.
 
+## Make a standalone .exe (no Python needed on other PCs)
+
+On a Windows PC with Python 3.10+ installed, double-click `build_exe.bat` in this folder (or run it
+in a terminal). It creates a virtual environment, installs the requirements and PyInstaller, and
+builds `dist\TextFixer\`:
+
+- `TextFixer.exe`: the app, no console window (errors go to `textfixer.log` next to it)
+- `TextFixerCLI.exe`: the same program with a console, for `check`, `serve` and seeing errors
+- `config.example.ini`: the first run copies it to `config.ini` and opens Settings
+- `models\`: put your OpenVINO model folder here (the default `MODEL_DIR=models/model` is relative to
+  `config.ini`, so the folder can live anywhere as long as the path is right)
+
+Copy the whole `dist\TextFixer` folder to another PC (also on the same Intel NPU driver) and run it.
+The build is a few hundred MB because it contains OpenVINO and its NPU/GPU/CPU plugins. It is not
+code-signed, so Windows SmartScreen or antivirus may warn on first run.
+
+I could only test the build on Linux (it ran: `TextFixerCLI check` found OpenVINO, `serve` answered
+requests, the app opened its first-run Settings). The Windows build and the NPU itself are for you
+to test. If `build_exe.bat` fails, send me the last lines it prints.
+
 ## Using another provider
 
 In Settings (or `config.ini`) set `PROVIDER`:

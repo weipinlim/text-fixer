@@ -8,3 +8,5 @@ pystray
 pillow
 # Only for `python -m textfixer convert` (turning a Hugging Face model into OpenVINO format):
 #   pip install "optimum-intel[openvino]"
+# Only for building the .exe (build_exe.bat installs it for you):
+#   pip install pyinstaller

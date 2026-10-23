@@ -12,7 +12,8 @@ from pathlib import Path
 
 from .config import Config, ensure_config
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config.ini"
+FROZEN = getattr(sys, "frozen", False)  # running as the packaged .exe
+DEFAULT_CONFIG = (Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent) / "config.ini"
 
 
 def load_config(path: str | None) -> tuple[Config, bool]:
@@ -122,7 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     conv.add_argument("--out", required=True, help="output folder, e.g. models/qwen2.5-3b")
     conv.add_argument("--group-size", type=int, default=-1, help="-1 = channel-wise (NPU default), or 128")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    level = logging.DEBUG if args.verbose else logging.INFO
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    if sys.stderr is None:  # the windowed .exe has no console: log to a file next to the config
+        logging.basicConfig(level=level, format=fmt, filename=str(DEFAULT_CONFIG.with_name("textfixer.log")))
+    else:
+        logging.basicConfig(level=level, format=fmt)
 
     command = args.command or "run"
     if command == "serve":

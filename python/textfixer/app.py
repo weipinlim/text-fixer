@@ -282,6 +282,15 @@ class App:
         except Exception:
             return False
 
+    @staticmethod
+    def relaunch_command(extra: list[str] | None = None) -> tuple[list[str], str | None]:
+        """Command (and working folder) that starts this app again, as .exe or from source."""
+        args = [*sys.argv[1:], *(extra or [])]
+        if getattr(sys, "frozen", False):
+            return [sys.executable, *args], None
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return [sys.executable, os.path.join(root, "run_textfixer.py"), *args], root
+
     def toggle_startup(self, config_path: str) -> bool:
         """Add/remove TextFixer from the Windows Run key. Returns the new state."""
         import winreg
@@ -290,14 +299,19 @@ class App:
             if self.startup_enabled():
                 winreg.DeleteValue(key, "TextFixer")
                 return False
-            exe = sys.executable
-            pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
-            exe = pythonw if os.path.exists(pythonw) else exe
-            winreg.SetValueEx(key, "TextFixer", 0, winreg.REG_SZ, f'"{exe}" -m textfixer --config "{config_path}"')
+            if getattr(sys, "frozen", False):
+                command = f'"{sys.executable}" --config "{config_path}"'
+            else:
+                pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+                exe = pythonw if os.path.exists(pythonw) else sys.executable
+                script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run_textfixer.py")
+                command = f'"{exe}" "{script}" --config "{config_path}"'
+            winreg.SetValueEx(key, "TextFixer", 0, winreg.REG_SZ, command)
             return True
 
     def restart(self) -> None:
         """Start a fresh copy (settings changed) and close this one."""
         self.hk.stop()
-        subprocess.Popen([sys.executable, *sys.argv])
+        command, cwd = self.relaunch_command()
+        subprocess.Popen(command, cwd=cwd)
         self.ui.call(self.ui.quit)

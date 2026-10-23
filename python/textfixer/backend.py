@@ -206,10 +206,10 @@ def create_backend(cfg, kind: str = "auto") -> Backend:
     if kind == "echo":
         return EchoBackend(cfg.server("MODEL_NAME") or "echo")
     return OpenVinoBackend(
-        model_dir=cfg.server("MODEL_DIR"),
+        model_dir=cfg.resolve_path(cfg.server("MODEL_DIR")),
         devices=cfg.server("DEVICE"),
         model_name=cfg.server("MODEL_NAME") or "local",
         max_prompt_len=int(cfg.number("Server", "MAX_PROMPT_LEN", 2048)),
         min_response_len=int(cfg.number("Server", "MIN_RESPONSE_LEN", 256)),
-        cache_dir=cfg.server("CACHE_DIR"),
+        cache_dir=cfg.resolve_path(cfg.server("CACHE_DIR")),
     )

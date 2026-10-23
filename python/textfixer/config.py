@@ -112,6 +112,12 @@ class Config:
     def tones(self) -> list[Preset]:
         return [p for p in self.presets if p.mode != "window"]
 
+    def resolve_path(self, value: str) -> str:
+        """Relative paths in config.ini (model folder, cache) are relative to config.ini itself,
+        so the app works no matter which folder it was started from."""
+        path = Path(value).expanduser()
+        return str(path if path.is_absolute() else (self.path.resolve().parent / path))
+
     def default_preset(self) -> Preset:
         for preset in self.presets:
             if str(preset.index) == self.setting("DEFAULT_PRESET"):
