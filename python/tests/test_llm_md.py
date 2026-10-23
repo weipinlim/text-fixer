@@ -60,6 +60,21 @@ def test_round_trip_against_ollama(cfg, ollama):
     assert done.wait(5) and box[0] == ("ECHO: async", None)
 
 
+def test_thinking_is_turned_off_and_rejection_is_handled(cfg, ollama):
+    c = LLMClient(cfg)
+    c.complete([{"role": "user", "content": "x"}])
+    assert ollama.requests[-1]["body"]["think"] is False
+    cfg.update("Settings", {"MODEL": "qwen2.5:3b"})  # this one answers 400 to "think"
+    c = LLMClient(cfg)
+    assert c.complete([{"role": "user", "content": "y"}]) == "ECHO: y"
+    assert "think" in ollama.requests[-2]["body"] and "think" not in ollama.requests[-1]["body"]
+    c.complete([{"role": "user", "content": "z"}])  # remembered: no failed attempt first
+    assert "think" not in ollama.requests[-1]["body"] and ollama.requests[-2]["body"]["messages"][-1]["content"] == "y"
+    cfg.update("Settings", {"MODEL": "llama3.2", "THINK": "on"})
+    LLMClient(cfg).complete([{"role": "user", "content": "w"}])
+    assert "think" not in ollama.requests[-1]["body"]
+
+
 def test_friendly_errors(cfg, tmp_path):
     cfg.update("Settings", {"MODEL": "nope"})
     with pytest.raises(LLMError, match="ollama pull nope"):

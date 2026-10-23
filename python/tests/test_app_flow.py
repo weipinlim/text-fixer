@@ -115,6 +115,38 @@ def test_compare_windows(app, ui, mode):
     assert pump(ui, lambda: not ui.windows)
 
 
+def test_compare_runs_one_at_a_time_with_ollama_and_shows_progress(app, ui, ollama):
+    ollama.delay = 0.3
+    app.compare(ctx_for(app), "tabs")
+    assert pump(ui, lambda: ui.windows)
+    win = next(iter(ui.windows))
+    assert pump(ui, lambda: sum(j.done for j in win.jobs) == 1)
+    # the first finished answer is shown and can be used while the others are still coming
+    assert "1 of 5 ready" in win.progress.cget("text")
+    assert str(win.use_btn.cget("state")) == "normal" and win.jobs[win.selected].done
+    assert pump(ui, lambda: all(j.done for j in win.jobs), 10)
+    assert win.progress.cget("text") == "All 5 ready"
+    chats = [r for r in ollama.requests if r["path"] == "/api/chat"]
+    assert len(chats) == 5
+    for before, after in zip(chats, chats[1:]):
+        assert after["start"] >= before["end"] - 0.01  # never two at once
+    win.close()
+
+
+def test_closing_compare_stops_the_remaining_requests(app, ui, ollama):
+    ollama.delay = 0.3
+    app.compare(ctx_for(app), "list")
+    assert pump(ui, lambda: ui.windows)
+    win = next(iter(ui.windows))
+    assert pump(ui, lambda: any(j.done for j in win.jobs))
+    assert "Waiting for its turn" in win.rows[-1].cget("text")
+    win.close()
+    t = __import__("time").time()
+    while __import__("time").time() - t < 1.0:
+        ui.root.update()
+    assert len([r for r in ollama.requests if r["path"] == "/api/chat"]) <= 2
+
+
 def test_compare_marks_incompatible(app, ui):
     app.clip.text = "GIBBERISH"
     app.compare(ctx_for(app), "tabs")

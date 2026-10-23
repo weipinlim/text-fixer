@@ -44,6 +44,7 @@ class Job:
     text: str = ""
     error: str = ""
     done: bool = False
+    running: bool = False  # the server is working on it now (others may be waiting their turn)
 
 
 class Ui:
@@ -305,10 +306,12 @@ class PopupWindow(tk.Toplevel):
 # ---------------------------------------------------------------------------
 
 class CompareWindow(tk.Toplevel):
-    def __init__(self, ui: Ui, app, ctx: Context, jobs: list[Job], mode: str):
+    def __init__(self, ui: Ui, app, ctx: Context, jobs: list[Job], mode: str, stop=None):
         super().__init__(ui.root)
         self.ui, self.app, self.ctx, self.jobs, self.mode = ui, app, ctx, jobs, mode
+        self.stop = stop  # threading.Event: set when the window closes, so no more answers are asked for
         self.selected = 0
+        self.user_picked_tab = False
         self.title("TextFixer - pick a version" if mode == "tabs" else "TextFixer - click one to use it (hover for the full text)")
         self.attributes("-topmost", True)
         body = tk.Frame(self, padx=8, pady=8)
@@ -335,13 +338,15 @@ class CompareWindow(tk.Toplevel):
                 row = tk.Frame(body)
                 row.pack(fill="x", pady=1)
                 tk.Label(row, text=f"{job.preset.index}. {job.preset.name}", width=16, anchor="w").pack(side="left")
-                label = tk.Label(row, text="Working...", width=70, anchor="w", relief="solid", bd=1, padx=4)
+                label = tk.Label(row, text="Waiting for its turn...", width=70, anchor="w", relief="solid", bd=1, padx=4)
                 label.pack(side="left")
                 label.bind("<Button-1>", lambda e, i=i: self.use(i))
                 label.bind("<Enter>", lambda e, i=i: self.hover(i))
                 label.bind("<Leave>", lambda e: self.ui.hide_tip())
                 self.rows.append(label)
             tk.Button(body, text="Cancel", width=10, command=self.close).pack(anchor="w", pady=(6, 0))
+        self.progress = tk.Label(body, text="", anchor="w", fg="#666")
+        self.progress.pack(fill="x", pady=(4, 0))
         for n in range(1, 10):
             self.bind(str(n), lambda e, n=n: self.key(n - 1))
         self.bind("<Escape>", lambda e: self.close())
@@ -351,15 +356,25 @@ class CompareWindow(tk.Toplevel):
         self.ui.track(self)
         self.refresh()
 
+    @staticmethod
+    def _state(job: Job) -> str:
+        return "Working..." if job.running else "Waiting for its turn..."
+
     def refresh(self) -> None:
         if not self.winfo_exists():
             return
+        ready = sum(1 for j in self.jobs if j.done)
+        self.progress.configure(text=f"All {len(self.jobs)} ready" if ready == len(self.jobs)
+                                else f"{ready} of {len(self.jobs)} ready - you can pick a finished one now")
         if self.mode == "tabs":
+            # Until you pick a tab yourself, show the first finished answer
+            if not self.user_picked_tab and not self.jobs[self.selected].done:
+                self.selected = next((i for i, j in enumerate(self.jobs) if j.done and not j.error), self.selected)
             for i, (b, job) in enumerate(zip(self.tabs, self.jobs)):
                 name = f"{job.preset.index} {job.preset.name}"
                 b.configure(text=f"[{name}]" if i == self.selected else name)
             job = self.jobs[self.selected]
-            text = f"Error: {job.error}" if job.error else (job.text if job.done else "Working...")
+            text = f"Error: {job.error}" if job.error else (job.text if job.done else self._state(job))
             self.box.configure(state="normal")
             self.box.delete("1.0", "end")
             self.box.insert("end", text)
@@ -371,9 +386,12 @@ class CompareWindow(tk.Toplevel):
                     label.configure(text=f"Error: {_one_line(job.error)}")
                 elif job.done:
                     label.configure(text=_one_line(job.text))
+                else:
+                    label.configure(text=self._state(job))
 
     def select(self, i: int) -> None:
         self.selected = i
+        self.user_picked_tab = True
         self.refresh()
 
     def key(self, i: int) -> None:
@@ -392,11 +410,15 @@ class CompareWindow(tk.Toplevel):
             return
         self.ui.hide_tip()
         self.ctx.taken = True
+        if self.stop:
+            self.stop.set()
         self.destroy()
         self.app.deliver(job.text, self.ctx)
 
     def close(self) -> None:
         self.ui.hide_tip()
+        if self.stop:
+            self.stop.set()
         if self.winfo_exists():
             self.destroy()
         if not self.ctx.taken:

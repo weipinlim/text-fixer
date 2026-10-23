@@ -38,6 +38,7 @@ SETTINGS_DEFAULTS = {
     "API_KEY": "",
     "MODEL": "llama3.2",
     "KEEP_ALIVE": "30m",  # how long Ollama keeps the model in memory after the last request
+    "THINK": "off",  # Ollama: let "thinking" models (e.g. qwen3) reason first: much slower, rarely needed here
     "TEMPERATURE": "0.2",
     "TIMEOUT": "120",
     "SELECTION_WAIT_MS": "300",

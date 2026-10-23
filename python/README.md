@@ -81,6 +81,9 @@ faster but make more mistakes.
 - `KEEP_ALIVE=30m`: how long Ollama keeps the model in memory after your last request. The first
   request after it unloads is slow because the model loads again.
 - `TIMEOUT=120`: seconds to wait for an answer (the first request also loads the model).
+- `THINK=off`: "thinking" models such as Qwen3 normally reason (hidden) before answering, which
+  makes every answer several times slower. `off` makes them answer straight away, which is plenty
+  for rewriting. Set `on` if you want the reasoning.
 
 Everything else (hotkeys, tones, `EXCLUDE_APPS`) works as in the AutoHotkey version. Hotkey syntax:
 `^` Ctrl, `!` Alt, `+` Shift, `#` Win, then a key or `LButton`/`RButton`/`MButton`.
@@ -110,6 +113,9 @@ code-signed, so Windows SmartScreen or antivirus may warn on first run.
 
 - **"Cannot reach Ollama"**: start Ollama (Start menu), or check `API_URL`.
 - **"Ollama does not have the model ..."**: Settings > Download model, or `ollama pull <model>`.
+- **"Every tone at once" takes a while**: a model on your PC writes one answer at a time, so 5 tones
+  take about 5 times as long as one. The window shows "2 of 5 ready" and you can pick any finished
+  version straight away; closing it stops the rest. Check `THINK=off` too.
 - **The first answer is slow**: the model is loading into memory. Later ones are faster until
   `KEEP_ALIVE` runs out.
 - **Nothing happens on a hotkey**: another program may own it. Change it in Settings. The tray

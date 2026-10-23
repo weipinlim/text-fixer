@@ -23,6 +23,8 @@ class MockOllama(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", PORT), MockHandler)
         self.requests: list[dict] = []
         self.installed = ["llama3.2:latest", "qwen2.5:3b"]
+        self.delay = 0.0  # seconds each chat answer takes
+        self.no_think_models = {"qwen2.5:3b"}  # these reject the "think" option, like some real models
 
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -45,7 +47,8 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
-        self.server.requests.append({"path": self.path, "body": body})
+        record = {"path": self.path, "body": body, "start": time.time()}
+        self.server.requests.append(record)
         if self.path == "/api/pull":
             self.send_response(200)
             self.end_headers()
@@ -64,9 +67,13 @@ class MockHandler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         if body["model"] not in ("llama3.2", "qwen2.5:3b"):
             return self._send(404, {"error": f"model '{body['model']}' not found"})
+        if "think" in body and body["model"] in self.server.no_think_models:
+            return self._send(400, {"error": f'"{body["model"]}" does not support thinking'})
         last = next(m["content"] for m in reversed(body["messages"]) if m["role"] == "user")
         if "SLOW" in last:
             time.sleep(0.5)
+        time.sleep(self.server.delay)
+        record["end"] = time.time()
         text = INCOMPATIBLE_MARK if "GIBBERISH" in last else f"ECHO: {last}"
         self._send(200, {"model": body["model"], "message": {"role": "assistant", "content": text}, "done": True})
 
@@ -115,6 +122,7 @@ def ollama():
 def cfg(tmp_path, ollama):
     ollama.requests.clear()
     ollama.installed[:] = ["llama3.2:latest", "qwen2.5:3b"]
+    ollama.delay = 0.0
     path = tmp_path / "config.ini"
     shutil.copyfile(Path(__file__).resolve().parent.parent / "config.example.ini", path)
     c = Config(path)

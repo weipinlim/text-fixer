@@ -22,6 +22,7 @@ class LLMError(Exception):
 class LLMClient:
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        self._send_think = True  # cleared if Ollama rejects the "think" option (older Ollama / model)
 
     @property
     def provider(self) -> str:
@@ -73,6 +74,8 @@ class LLMClient:
             body = {"model": model, "messages": chat, "stream": False, "options": {"temperature": temperature}}
             if self.cfg.setting("KEEP_ALIVE"):
                 body["keep_alive"] = self.cfg.setting("KEEP_ALIVE")
+            if self._send_think and self.cfg.setting("THINK").lower() in ("off", "false", "no", "0"):
+                body["think"] = False  # thinking models answer straight away
             return body
         return {"model": model, "messages": chat, "temperature": temperature, "stream": False}
 
@@ -107,6 +110,16 @@ class LLMClient:
 
     def complete(self, messages: Messages, system: str = "") -> str:
         """Blocking request; returns the answer text or raises LLMError."""
+        try:
+            return self._complete(messages, system)
+        except LLMError as exc:
+            text = str(exc).lower()
+            if self.provider == "ollama" and self._send_think and text.startswith("http 400") and "think" in text:
+                self._send_think = False  # this model/Ollama does not take the option: ask without it
+                return self._complete(messages, system)
+            raise
+
+    def _complete(self, messages: Messages, system: str) -> str:
         request = urllib.request.Request(
             self.endpoint(), data=json.dumps(self.body(messages, system)).encode("utf-8"),
             headers=self.headers(), method="POST")

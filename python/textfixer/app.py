@@ -212,28 +212,51 @@ class App:
             self.busy = False
 
     def compare(self, ctx: Context, mode: str) -> None:
-        """Run every tone on the selection and show the answers as they come in."""
+        """Run every tone on the selection and show the answers as they come in.
+
+        With Ollama the tones run one after another: a local model shares one CPU/GPU, so asking
+        for all at once only makes every answer arrive late. One at a time, the first answer shows
+        up quickly and you can pick it while the rest are still being written. Closing the window
+        (or picking one) stops the ones not started yet."""
         jobs = [Job(p) for p in self.cfg.tones]
         if not jobs:
             self.release(ctx)
             return
+        stop = threading.Event()
         holder: list[CompareWindow] = []
-        self.ui.call(lambda: holder.append(CompareWindow(self.ui, self, ctx, jobs, mode)))
+        self.ui.call(lambda: holder.append(CompareWindow(self.ui, self, ctx, jobs, mode, stop)))
 
-        def finished(job: Job, text, err) -> None:
-            if err is not None:
-                job.error = str(err)
-            elif (text or "").strip() == INCOMPATIBLE_MARK:
-                job.error = "the text isn't compatible with this request"
-            else:
-                job.text = (text or "").strip()
-            job.done = True
+        def refresh() -> None:
             self.ui.call(lambda: holder and holder[0].refresh())
 
-        for job in jobs:
-            self.llm.complete_async([{"role": "user", "content": ctx.original}],
-                                    f"{job.preset.prompt} {INCOMPATIBLE_RULE}",
-                                    lambda text, err, job=job: finished(job, text, err))
+        def run_one(job: Job) -> None:
+            job.running = True
+            refresh()
+            try:
+                text = self.llm.complete([{"role": "user", "content": ctx.original}],
+                                         f"{job.preset.prompt} {INCOMPATIBLE_RULE}")
+            except Exception as exc:
+                job.error = str(exc)
+            else:
+                if text.strip() == INCOMPATIBLE_MARK:
+                    job.error = "the text isn't compatible with this request"
+                else:
+                    job.text = text.strip()
+            job.running = False
+            job.done = True
+            refresh()
+
+        if self.cfg.provider == "ollama":
+            def one_by_one() -> None:
+                for job in jobs:
+                    if stop.is_set():
+                        break
+                    run_one(job)
+
+            threading.Thread(target=one_by_one, daemon=True).start()
+        else:  # cloud servers answer in parallel
+            for job in jobs:
+                threading.Thread(target=run_one, args=(job,), daemon=True).start()
 
     # -- UI thread helpers ------------------------------------------------------
     def show_popup(self, ctx: Context) -> None:
