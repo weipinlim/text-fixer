@@ -1,7 +1,12 @@
 # TextFixer
 
 Fix or rewrite selected text in any Windows app with one hotkey. TextFixer sends the selection to
-your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back in place.
+your LLM and pastes the result back in place. It works with any OpenAI-compatible server (vLLM,
+llama.cpp, LM Studio, ChatGPT...), Google Gemini and Ollama.
+
+Besides rewriting, it can summarize, list key points or make a table in a result window with
+follow-up chat, run every tone at once so you can pick the best, take a free-form instruction
+("translate to French"), and explain a word in a tooltip.
 
 ## Setup
 
@@ -10,13 +15,16 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
    ```
    git clone https://github.com/weipinlim/text-fixer.git
    ```
-3. Copy `config.example.ini` to `config.ini` in the same folder.
-4. Open `config.ini` and fill in:
-   - `API_URL`: your server's chat endpoint, e.g. `http://192.168.1.10:8000/v1/chat/completions`
-   - `API_KEY`: your key (leave empty if the server has no `--api-key`)
-   - `MODEL`: the model name, as listed at `http://YOUR_SERVER:8000/v1/models`
-   - optionally, `DEFAULT_PRESET` and the `[Preset1]`…`[Preset5]` prompts
-5. Double-click `TextFixer.ahk`. A green **H** icon appears in the system tray.
+3. Double-click `TextFixer.ahk` (keep the `lib` folder next to it). The first time, it creates
+   `config.ini` from `config.example.ini` and opens the **Settings** window. Fill in:
+   - **Provider**: `openai` (vLLM, llama.cpp, LM Studio, ChatGPT...), `gemini` or `ollama`
+   - **API URL**: for `openai`, your server's chat endpoint, e.g.
+     `http://192.168.1.10:8000/v1/chat/completions`. Leave it empty for `gemini` and `ollama`.
+   - **API key**: your key (leave empty if the server has none)
+   - **Model**: the model name, e.g. as listed at `http://YOUR_SERVER:8000/v1/models`
+
+   Press **Save**; the script reloads and a green **H** icon appears in the system tray.
+   You can reopen Settings any time from the tray icon, or edit `config.ini` directly.
 
 `config.ini` is in `.gitignore`, so your real key is never uploaded.
 
@@ -27,6 +35,7 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
    **Ctrl+right-click** to pick any tone from a menu at the cursor,
    **Ctrl+Shift+left-click** to see every tone's result in a box next to the cursor (one tab each) and pick
    one, **Ctrl+Shift+right-click** to see every tone in one list at the cursor (hover for the full text),
+   **Ctrl+Shift+Space** for a popup with a "describe your change" box and a button per tone,
    or press a tone hotkey:
 
    | Hotkey | Tone         | What it does                                              |
@@ -36,10 +45,16 @@ your self-hosted vLLM server (OpenAI-compatible API) and pastes the result back 
    | Ctrl+3 | Sarcastic    | Dry, witty, playful sarcasm                               |
    | Ctrl+4 | Diplomatic   | Softens blunt or negative wording, stays clear            |
    | Ctrl+5 | Confident    | Direct and assertive, removes "just", "sorry to bother"…  |
+   | Ctrl+6 | Summary      | Shows a summary in a result window (follow-up chat)        |
+   | Ctrl+7 | Key Points   | Shows the key points in a result window                    |
+   | Ctrl+8 | Table        | Shows the text as a table in a result window               |
 
-   Every tone also fixes spelling and grammar.
+   Tones 1-5 also fix spelling and grammar. Tones 6-8 open the result window instead of
+   replacing your text.
 
-3. Wait for the tooltip to disappear. The selection is replaced with the result.
+3. Wait for the tooltip to disappear. The selection is replaced with the result. If the model
+   decides the text can't be processed (for example random gibberish), nothing is pasted and a
+   tooltip says so.
 
 **No text selected?** The key or click is passed straight through to the app, so normal shortcuts
 keep working: Ctrl+1–5 in Outlook, Teams and browser tabs, and Ctrl+click to open links,
@@ -47,7 +62,21 @@ multi-select or Ctrl+drag. Because TextFixer first checks for a selection, these
 longer than usual.
 
 Your clipboard is restored afterwards. Right-click the tray icon → **Show hotkeys** to see the
-current list.
+current list. The tray menu also has **Chat window**, **Settings...**, **Pause hotkeys** (turns all
+hotkeys off and on) and **Start with Windows**.
+
+## Popup, result window and chat
+
+- **Popup** (`POPUP_HOTKEY`, default `^+Space`, Ctrl+Shift+Space): opens next to the cursor. Type
+  what you want changed ("translate to French", "add code comments", "make it shorter") and press
+  Enter, or click one of the tone buttons. Click elsewhere or press Esc to close it.
+- **Result window**: tones with `MODE=window` (Summary, Key Points, Table by default) show the answer
+  here, formatted as Markdown (headings, lists, tables, code). Type a follow-up question in the box
+  at the bottom and press Enter; the whole conversation is sent each time. **Copy last answer**
+  copies the Markdown text. If the embedded browser can't be used on your PC, the same content is
+  shown as plain text.
+- **Chat window** (`CHAT_HOTKEY`, default `^!Space`, Ctrl+Alt+Space, or the tray menu): the same
+  window with no selection needed, for a general chat. The history is dropped when you close it.
 
 ## Choosing the default tone
 
@@ -109,21 +138,27 @@ Other settings in `[Settings]`:
   selected, so Ctrl+1 (Format Cells) and Ctrl+click would otherwise be taken over.
 - `SELECTION_WAIT_MS`: how long to wait for the selection to be copied (default 300). Raise it if a
   slow app sometimes gets the normal shortcut when text *is* selected.
+- `PROVIDER`, `API_URL`, `API_KEY`, `MODEL`, `TEMPERATURE`, `TIMEOUT`: connection settings (the
+  Settings window edits these). For `gemini` and `ollama` an empty `API_URL` uses the standard
+  address (`https://generativelanguage.googleapis.com/...` and `http://localhost:11434/api/chat`).
+- Per tone, `MODE=window` shows the answer in the result window instead of replacing the text.
 
 ## Make a standalone .exe (optional)
 
 So you can run it on PCs without AutoHotkey:
 
 1. Right-click `TextFixer.ahk` → **Compile Script** (or open *Ahk2Exe* from the AutoHotkey Dash).
-2. Put `config.ini` in the same folder as `TextFixer.exe`.
+   The files in `lib` are included automatically.
+2. Put `config.example.ini` in the same folder as `TextFixer.exe` (the first run creates `config.ini`
+   from it), or put your own `config.ini` there.
 3. Double-click `TextFixer.exe`.
 
-To start it automatically with Windows, press `Win+R`, type `shell:startup`, and put a shortcut to
-`TextFixer.ahk` / `TextFixer.exe` in that folder.
+To start it automatically with Windows, use the tray menu → **Start with Windows**.
 
 ## Troubleshooting
 
-- **"config.ini not found"**: create it from `config.example.ini` next to the script/exe.
+- **"config.ini not found"**: `config.example.ini` is missing next to the script/exe. Put it back,
+  or create `config.ini` yourself.
 - **"Request failed: HTTP 401"**: wrong `API_KEY`.
 - **"Request failed: HTTP 404"**: check `API_URL` ends with `/v1/chat/completions` and `MODEL` matches the server.
 - **Timeout / cannot connect**: check that the server is reachable from this PC, or raise `TIMEOUT`.

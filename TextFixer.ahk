@@ -2,16 +2,30 @@
 #SingleInstance Force
 
 ; TextFixer - select text anywhere, press a preset hotkey, and the text is replaced
-; with a rewritten version from your OpenAI-compatible (vLLM) server.
+; with a rewritten version from your LLM (OpenAI-compatible/vLLM, Gemini or Ollama).
 ; If nothing is selected, the hotkey is passed through to the app unchanged.
 ; All settings live in config.ini next to this script (or the compiled .exe).
 
+#Include lib\Llm.ahk
+#Include lib\Markdown.ahk
+#Include lib\Windows.ahk
+
 global CONFIG_FILE := A_ScriptDir "\config.ini"
 global MAX_PRESETS := 9
+global SETTINGS := ""  ; the open settings window, if any
+global RESULT   := ""  ; the open result/chat window, if any
+global POPUP    := ""  ; the open popup at the cursor, if any
 
+; First run: create config.ini from the example and open the settings window
 if !FileExist(CONFIG_FILE) {
-    MsgBox("config.ini not found in:`n" A_ScriptDir "`n`nCopy config.example.ini to config.ini and fill in your settings.", "TextFixer", "Icon!")
-    ExitApp
+    example := A_ScriptDir "\config.example.ini"
+    if !FileExist(example) {
+        MsgBox("config.ini not found in:`n" A_ScriptDir "`n`nCopy config.example.ini to config.ini and fill in your settings.", "TextFixer", "Icon!")
+        ExitApp
+    }
+    FileCopy(example, CONFIG_FILE)
+    ShowSettings(true)
+    return
 }
 
 global API_URL       := IniRead(CONFIG_FILE, "Settings", "API_URL", "")
@@ -21,6 +35,7 @@ global TEMPERATURE   := IniRead(CONFIG_FILE, "Settings", "TEMPERATURE", "0.2")
 global TIMEOUT_SEC   := IniRead(CONFIG_FILE, "Settings", "TIMEOUT", "60")
 global SELECTION_MS  := IniRead(CONFIG_FILE, "Settings", "SELECTION_WAIT_MS", "300")
 global EXCLUDE_APPS  := IniRead(CONFIG_FILE, "Settings", "EXCLUDE_APPS", "")
+global PROVIDER      := StrLower(IniRead(CONFIG_FILE, "Settings", "PROVIDER", "openai"))
 
 if !IsNumber(TEMPERATURE)
     TEMPERATURE := "0.2"
@@ -36,10 +51,20 @@ if (EXPLAIN_PROMPT = "")
     EXPLAIN_PROMPT := "Explain the selected word, phrase or text briefly and simply, in the same language as the text. For a word, give its meaning and one short example sentence. Keep it under 80 words. Return only the explanation."
 EXPLAIN_PROMPT := StrReplace(EXPLAIN_PROMPT, "\n", "`n")
 
-if (API_URL = "" || MODEL = "") {
-    MsgBox("API_URL and MODEL must be set in config.ini.", "TextFixer", "Icon!")
+if !InStr("|openai|gemini|ollama|", "|" PROVIDER "|") {
+    MsgBox("PROVIDER in config.ini must be openai, gemini or ollama (it is '" PROVIDER "').", "TextFixer", "Icon!")
     ExitApp
 }
+if (MODEL = "" || (PROVIDER = "openai" && API_URL = "")) {
+    MsgBox("MODEL (and API_URL for the openai provider) must be set in config.ini.`n`nRight-click the tray icon > Settings.", "TextFixer", "Icon!")
+    ExitApp
+}
+
+; Appended to every tone's prompt: lets the model refuse nonsense instead of pasting it
+global INCOMPATIBLE_MARK := "ERROR_TEXT_INCOMPATIBLE_WITH_REQUEST"
+global INCOMPATIBLE_RULE := "If the text is absolutely incompatible with this request (for example random gibberish), output exactly " INCOMPATIBLE_MARK " and nothing else."
+global CUSTOM_PROMPT := "You are a writing and coding assistant. Make the change the user describes to the text or code they give you. Output ONLY the modified text or code, without any extra comments. Respond in the same language as the input."
+global FOLLOWUP_SYSTEM := "You are a helpful AI assistant. Answer clearly and directly, keep the same style as your earlier answers, and use Markdown where it helps readability."
 
 ; Tone presets: [Preset1] .. [Preset9], each with NAME, HOTKEY and PROMPT
 ; (an empty HOTKEY means the tone is only used via the default hotkey).
@@ -47,12 +72,15 @@ if (API_URL = "" || MODEL = "") {
 ; MENU_HOTKEY (Ctrl+Right click) shows a menu to pick any tone.
 ; PREVIEW_HOTKEY (Ctrl+Shift+Left click) runs every tone at once and shows the results
 ; in a box next to the cursor (one tab per tone); pick one to replace the selection.
+; POPUP_HOTKEY (Ctrl+Shift+Space) opens a popup at the cursor: type a change or click a tone.
+; CHAT_HOTKEY (Ctrl+Alt+Space) opens a chat window.
 ; EXPLAIN_HOTKEY (Ctrl+Middle click) explains the selected word or text in a tooltip
 ; (nothing is replaced).
 ; RESULTS_MENU_HOTKEY (Ctrl+Shift+Right click) runs every tone at once and lists the
 ; results in one window at the cursor (hover for the full text, click to use).
 global FALLBACK_PROMPT := "Fix spelling, grammar and punctuation in the user's text. Keep the meaning, tone and language. Return only the corrected text."
-global PRESETS := []
+global PRESETS := []  ; every [PresetN] section
+global TONES   := []  ; the ones that replace your text (MODE=replace, the default)
 Loop MAX_PRESETS {
     section := "Preset" A_Index
     name := IniRead(CONFIG_FILE, section, "NAME", "")
@@ -60,12 +88,18 @@ Loop MAX_PRESETS {
     if (name = "" && prompt = "")
         continue
     ; Allow line breaks in prompts via \n
-    PRESETS.Push({
+    ; MODE=window shows the answer in the result window (with follow-up chat) instead
+    ; of replacing the selection
+    preset := {
         index:  A_Index,
         name:   name != "" ? name : section,
         hotkey: IniRead(CONFIG_FILE, section, "HOTKEY", ""),
+        mode:   StrLower(IniRead(CONFIG_FILE, section, "MODE", "replace")),
         prompt: StrReplace(prompt != "" ? prompt : FALLBACK_PROMPT, "\n", "`n")
-    })
+    }
+    PRESETS.Push(preset)
+    if (preset.mode != "window")
+        TONES.Push(preset)
 }
 if (PRESETS.Length = 0) {
     MsgBox("No presets found in config.ini. Copy the [Preset1] .. [Preset5] sections from config.example.ini.", "TextFixer", "Icon!")
@@ -81,6 +115,10 @@ global EXPLAIN_HOTKEY := IniRead(CONFIG_FILE, "Settings", "EXPLAIN_HOTKEY", "^MB
 global EXPLAIN_HK     := ""
 global EXPLAIN_START  := 0  ; tick count while an explanation tooltip is showing
 global RESULTS_HOTKEY := IniRead(CONFIG_FILE, "Settings", "RESULTS_MENU_HOTKEY", "^+RButton")
+global POPUP_HOTKEY   := IniRead(CONFIG_FILE, "Settings", "POPUP_HOTKEY", "^+Space")
+global CHAT_HOTKEY    := IniRead(CONFIG_FILE, "Settings", "CHAT_HOTKEY", "^!Space")
+global POPUP_HK       := ""
+global CHAT_HK        := ""
 global MENU_HK        := ""
 global RESULTS_HK     := ""
 global PREVIEW_HK     := ""
@@ -109,6 +147,10 @@ if (RESULTS_HOTKEY != "")
 
 if (EXPLAIN_HOTKEY != "")
     EXPLAIN_HK := BindHotkey(EXPLAIN_HOTKEY, RunExplain, "[Settings] EXPLAIN_HOTKEY")
+if (POPUP_HOTKEY != "")
+    POPUP_HK := BindHotkey(POPUP_HOTKEY, RunPopup, "[Settings] POPUP_HOTKEY")
+if (CHAT_HOTKEY != "")
+    CHAT_HK := BindHotkey(CHAT_HOTKEY, RunChat, "[Settings] CHAT_HOTKEY")
 
 ; While the preview box is the active window, 1-9 switch tabs
 HotIf(PreviewActive)
@@ -118,23 +160,50 @@ HotIf()
 
 ; Tray menu: pick the default tone (saved to config.ini)
 global DefaultMenu := Menu()
-for preset in PRESETS
+for preset in TONES
     DefaultMenu.Add(preset.index ". " preset.name, SetDefault.Bind(preset))
 UpdateDefaultMenu()
 
 A_IconTip := "TextFixer"
 A_TrayMenu.Add()
 A_TrayMenu.Add("Default tone" (DEFAULT_HK ? " (" ReadableHotkey(DEFAULT_HK) ")" : ""), DefaultMenu)
+A_TrayMenu.Add("Chat window" (CHAT_HK ? " (" ReadableHotkey(CHAT_HK) ")" : ""), (*) => OpenResultWindow("Chat", "", ""))
 A_TrayMenu.Add("Show hotkeys", (*) => MsgBox(HotkeySummary(), "TextFixer hotkeys"))
+A_TrayMenu.Add("Settings...", (*) => ShowSettings())
 A_TrayMenu.Add("Edit config.ini", (*) => Run('notepad.exe "' CONFIG_FILE '"'))
 A_TrayMenu.Add("Reload config", (*) => Reload())
+A_TrayMenu.Add("Pause hotkeys", TogglePause)
+A_TrayMenu.Add("Start with Windows", ToggleStartup)
+if FileExist(StartupLink())
+    A_TrayMenu.Check("Start with Windows")
 TrayTip("Running. Select text and press a hotkey:`n" HotkeySummary(), "TextFixer")
+
+; Tray: turn all hotkeys off and on (Suspend), and start with Windows (Startup shortcut)
+TogglePause(*) {
+    Suspend(-1)
+    A_IsSuspended ? A_TrayMenu.Check("Pause hotkeys") : A_TrayMenu.Uncheck("Pause hotkeys")
+}
+
+StartupLink() {
+    return A_Startup "\TextFixer.lnk"
+}
+
+ToggleStartup(*) {
+    link := StartupLink()
+    if FileExist(link) {
+        FileDelete(link)
+        A_TrayMenu.Uncheck("Start with Windows")
+    } else {
+        FileCreateShortcut(A_ScriptFullPath, link, A_ScriptDir)
+        A_TrayMenu.Check("Start with Windows")
+    }
+}
 
 DefaultPreset() {
     for preset in PRESETS
         if (preset.index = DEFAULT_INDEX)
             return preset
-    return PRESETS[1]
+    return TONES.Length ? TONES[1] : PRESETS[1]
 }
 
 SetDefault(preset, *) {
@@ -145,7 +214,7 @@ SetDefault(preset, *) {
 
 UpdateDefaultMenu() {
     current := DefaultPreset()
-    for preset in PRESETS {
+    for preset in TONES {
         item := preset.index ". " preset.name
         (preset.index = current.index) ? DefaultMenu.Check(item) : DefaultMenu.Uncheck(item)
     }
@@ -159,6 +228,10 @@ HotkeySummary() {
         text .= ReadableHotkey(PREVIEW_HK) " = show every tone in a box, then pick one`n"
     if EXPLAIN_HK
         text .= ReadableHotkey(EXPLAIN_HK) " = explain the selected word in a tooltip`n"
+    if POPUP_HK
+        text .= ReadableHotkey(POPUP_HK) " = popup: describe a change or pick a tone`n"
+    if CHAT_HK
+        text .= ReadableHotkey(CHAT_HK) " = open the chat window`n"
     if RESULTS_HK
         text .= ReadableHotkey(RESULTS_HK) " = show every tone as a menu, then pick one`n"
     for preset in PRESETS
@@ -220,10 +293,10 @@ IsExcludedApp() {
 ; Send the selection to every tone at once; PollJob collects the answers
 StartAll(original) {
     jobs := []
-    for preset in PRESETS {
+    for preset in TONES {
         job := {preset: preset, text: "", error: "", done: false, start: A_TickCount}
         try {
-            job.http := StartRequest(original, preset.prompt, true)
+            job.http := StartRequest(original, preset.prompt " " INCOMPATIBLE_RULE, true)
         } catch as err {
             job.done := true
             job.error := err.Message
@@ -237,14 +310,15 @@ StartAll(original) {
 PollJob(job) {
     if job.done
         return true
-    try ready := job.http.WaitForResponse(0.01)
-    catch
-        ready := false
-    if ready {
+    if HttpReady(job.http) {
         job.done := true
         try job.text := Trim(FinishRequest(job.http), " `t`r`n")
         catch as err
             job.error := err.Message
+        if (job.text = INCOMPATIBLE_MARK) {
+            job.text := ""
+            job.error := "the text isn't compatible with this request"
+        }
     } else if (A_TickCount - job.start > TIMEOUT_SEC * 1000) {
         job.done := true
         job.error := "timed out"
@@ -365,11 +439,11 @@ RunPreview(hk, *) {
     CoordMode("Mouse", "Screen")
     MouseGetPos(&mx, &my)
     width := 660
-    g := Gui("+AlwaysOnTop +ToolWindow", "TextFixer - 1-" PRESETS.Length " or click a tab, Enter to use")
+    g := Gui("+AlwaysOnTop +ToolWindow", "TextFixer - 1-" TONES.Length " or click a tab, Enter to use")
     g.SetFont("s10")
     jobs := StartAll(original)
     tabs := []
-    btnWidth := Min(130, (width - 4 * (PRESETS.Length - 1)) // PRESETS.Length)
+    btnWidth := Min(130, (width - 4 * (jobs.Length - 1)) // jobs.Length)
     for job in jobs {
         btn := g.AddButton((A_Index = 1 ? "xm" : "x+4") " w" btnWidth, "")
         btn.OnEvent("Click", PreviewSelect.Bind(A_Index))
@@ -387,24 +461,6 @@ RunPreview(hk, *) {
     PreviewSelect(1)
     ShowNearCursor(g, mx, my)
     SetTimer(PreviewPoll, 200)
-}
-
-; Show a window just below-right of the cursor, kept inside the screen it is on
-; (above the cursor if there is no room below)
-ShowNearCursor(g, mx, my) {
-    g.Show("Hide")
-    g.GetPos(, , &w, &h)
-    left := 0, top := 0, right := A_ScreenWidth, bottom := A_ScreenHeight
-    Loop MonitorGetCount() {
-        MonitorGetWorkArea(A_Index, &l, &t, &r, &b)
-        if (mx >= l && mx < r && my >= t && my < b) {
-            left := l, top := t, right := r, bottom := b
-            break
-        }
-    }
-    x := Max(left, Min(mx + 10, right - w))
-    y := (my + 20 + h <= bottom) ? my + 20 : Max(top, my - 10 - h)
-    g.Show("x" x " y" y)
 }
 
 PreviewActive(*) {
@@ -486,6 +542,11 @@ PreviewClose(*) {
     A_Clipboard := state.savedClip
 }
 
+; Open a blank chat window (no selection needed)
+RunChat(hk, *) {
+    OpenResultWindow("Chat", "", "")
+}
+
 ; Ask the LLM to explain the selected word or text and show the answer in a tooltip
 ; (nothing is replaced); the tooltip goes away on a click, Esc or after EXPLAIN_SECONDS
 RunExplain(hk, *) {
@@ -553,7 +614,16 @@ RunPreset(preset, hk, *) {
         PassThrough(hk)
         return
     }
-    ApplyTone(preset, original, savedClip)
+    RunTone(preset, original, savedClip)
+}
+
+; Run a tone on the text: replace the selection, or open the result window (MODE=window)
+RunTone(preset, original, savedClip) {
+    if (preset.mode = "window") {
+        A_Clipboard := savedClip
+        OpenResultWindow(preset.name, preset.prompt, original)
+    } else
+        ApplyTone(preset, original, savedClip)
 }
 
 ; Show the tone menu at the cursor; the chosen tone is applied by PickTone
@@ -589,20 +659,29 @@ PickTone(preset, *) {
         return
     job := PENDING
     PENDING := ""
-    ApplyTone(preset, job.original, job.savedClip)
+    RunTone(preset, job.original, job.savedClip)
 }
 
-ApplyTone(preset, original, savedClip) {
+; userText replaces the text sent to the LLM (used by the popup's custom instruction);
+; the selection's trailing whitespace is still taken from `original`
+ApplyTone(preset, original, savedClip, userText := "") {
     global BUSY
     BUSY := true
     ToolTip(preset.name "...")
     try {
-        fixed := CallLLM(original, preset.prompt)
+        fixed := CallLLM(userText != "" ? userText : original, preset.prompt " " INCOMPATIBLE_RULE)
     } catch as err {
         ToolTip()
         A_Clipboard := savedClip
         BUSY := false
         MsgBox("Request failed:`n`n" err.Message, "TextFixer", "Iconx")
+        return
+    }
+    if (Trim(fixed, " `t`r`n") = INCOMPATIBLE_MARK) {
+        A_Clipboard := savedClip
+        BUSY := false
+        ToolTip("The text isn't compatible with this request.")
+        SetTimer(() => ToolTip(), -2500)
         return
     }
     ToolTip()
@@ -626,106 +705,4 @@ PasteText(text, savedClip) {
     Send("^v")
     Sleep(500)
     A_Clipboard := savedClip
-}
-
-CallLLM(text, prompt) {
-    return FinishRequest(StartRequest(text, prompt, false))
-}
-
-; Send the chat request; with async=true it returns at once and FinishRequest
-; reads the answer after http.WaitForResponse() reports it has arrived
-StartRequest(text, prompt, async) {
-    body := '{"model":' JsonEscape(MODEL)
-        . ',"messages":[{"role":"system","content":' JsonEscape(prompt) '}'
-        . ',{"role":"user","content":' JsonEscape(text) '}]'
-        . ',"temperature":' TEMPERATURE ',"stream":false}'
-
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.SetTimeouts(5000, 5000, 30000, TIMEOUT_SEC * 1000)
-    http.Open("POST", API_URL, async)
-    http.SetRequestHeader("Content-Type", "application/json")
-    if (API_KEY != "")
-        http.SetRequestHeader("Authorization", "Bearer " API_KEY)
-    http.Send(body)
-    return http
-}
-
-FinishRequest(http) {
-    response := ReadUtf8Body(http)
-    if (http.Status != 200)
-        throw Error("HTTP " http.Status "`n" SubStr(response, 1, 500))
-
-    content := ExtractContent(response)
-    ; Drop reasoning blocks some models emit before the answer
-    return RegExReplace(content, "s)^\s*<think>.*?</think>\s*")
-}
-
-; Decode the raw response bytes as UTF-8 (ResponseText may guess the wrong charset)
-ReadUtf8Body(http) {
-    bytes := http.ResponseBody
-    size := bytes.MaxIndex() + 1
-    if (size <= 0)
-        return ""
-    pData := NumGet(ComObjValue(bytes), 8 + A_PtrSize, "Ptr")
-    return StrGet(pData, size, "UTF-8")
-}
-
-; Build a JSON string literal; non-ASCII is sent as \uXXXX so the body is plain ASCII
-JsonEscape(str) {
-    out := '"'
-    p := StrPtr(str)
-    Loop StrLen(str) {
-        c := NumGet(p, (A_Index - 1) * 2, "UShort")
-        if (c = 0x22)
-            out .= '\"'
-        else if (c = 0x5C)
-            out .= '\\'
-        else if (c >= 0x20 && c < 0x7F)
-            out .= Chr(c)
-        else
-            out .= Format("\u{:04X}", c)
-    }
-    return out '"'
-}
-
-; Pull choices[0].message.content out of the chat completion response
-ExtractContent(json) {
-    pos := InStr(json, '"message"')
-    if !pos || !RegExMatch(json, '"content"\s*:\s*"', &m, pos)
-        throw Error("Unexpected response:`n" SubStr(json, 1, 500))
-
-    out := ""
-    i := m.Pos + m.Len
-    len := StrLen(json)
-    while (i <= len) {
-        ch := SubStr(json, i, 1)
-        if (ch = '"')
-            return out
-        if (ch != "\") {
-            out .= ch
-            i++
-            continue
-        }
-        esc := SubStr(json, i + 1, 1)
-        switch esc {
-            case "n": out .= "`n"
-            case "r": out .= "`r"
-            case "t": out .= "`t"
-            case "b": out .= "`b"
-            case "f": out .= "`f"
-            case "u":
-                code := Integer("0x" SubStr(json, i + 2, 4))
-                i += 4
-                ; Combine a UTF-16 surrogate pair into one character
-                if (code >= 0xD800 && code <= 0xDBFF && SubStr(json, i + 2, 2) = "\u") {
-                    low := Integer("0x" SubStr(json, i + 4, 4))
-                    code := 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
-                    i += 6
-                }
-                out .= Chr(code)
-            default: out .= esc  ; \" \\ \/
-        }
-        i += 2
-    }
-    throw Error("Malformed response:`n" SubStr(json, 1, 500))
 }
