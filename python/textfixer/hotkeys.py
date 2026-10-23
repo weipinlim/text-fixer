@@ -21,6 +21,7 @@ NAMED_VK = {"space": 0x20, "enter": 0x0D, "return": 0x0D, "tab": 0x09, "esc": 0x
             "backspace": 0x08, "delete": 0x2E, "insert": 0x2D, "home": 0x24, "end": 0x23,
             "pgup": 0x21, "pgdn": 0x22, "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28}
 MOD_NAMES = {"^": "ctrl", "!": "alt", "+": "shift", "#": "win"}
+MOD_VKS = {"ctrl": {0x11, 0xA2, 0xA3}, "alt": {0x12, 0xA4, 0xA5}, "shift": {0x10, 0xA0, 0xA1}, "win": {0x5B, 0x5C}}
 MOD_LABEL = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "win": "Win"}
 
 
@@ -98,7 +99,9 @@ class HotkeyManager:
         self.on_any_input: Callable[[], None] | None = None  # any click or Esc that is not a hotkey
         self._listeners = []
         self._held: set = set()            # keys whose press we swallowed (until released)
-        self._swallowed: dict[str, threading.Event] = {}  # mouse buttons: set when physically released
+        self._pending_up: set = set()      # mouse buttons whose press we swallowed: swallow the next release too
+        self._physical: set = set()        # keys the user is really holding (from the hook, ignoring ours)
+        self._released: dict[str, threading.Event] = {}  # set when that release has happened
         self.suppresses = winapi.IS_WINDOWS
 
     def register(self, action: str, spec: str) -> Combo:
@@ -141,6 +144,7 @@ class HotkeyManager:
         if msg not in (0x100, 0x104, 0x101, 0x105) or data.flags & 0x10:  # not a key event / injected by us
             return True
         vk, down = data.vkCode, msg in (0x100, 0x104)
+        (self._physical.add if down else self._physical.discard)(vk)
         if not down:
             if vk in self._held:
                 self._held.discard(vk)
@@ -164,13 +168,16 @@ class HotkeyManager:
         if msg in names:
             found = self.combos.get((_mods_now(), names[msg]))
             if found and not self.paused:
-                self._swallowed[names[msg]] = threading.Event()
+                self._pending_up.add(names[msg])
+                self._released[names[msg]] = threading.Event()
                 self._fire(*found)
                 listener.suppress_event()
             else:
                 self._any_input()
-        elif msg in ups and ups[msg] in self._swallowed:
-            self._swallowed[ups[msg]].set()
+        elif msg in ups and ups[msg] in self._pending_up:
+            # Swallow only the release that belongs to the swallowed press; later clicks are untouched
+            self._pending_up.discard(ups[msg])
+            self._released[ups[msg]].set()
             listener.suppress_event()
         return True
 
@@ -183,8 +190,13 @@ class HotkeyManager:
             return f"f{vk - 0x70 + 1}"
         return chr(vk).lower() if 0x30 <= vk <= 0x5A else ""
 
+    def physically_down(self, mod: str) -> bool:
+        """Is the user really holding this modifier ("ctrl", "alt", "shift", "win")? Unlike
+        GetAsyncKeyState this ignores keys we pressed or released ourselves."""
+        return bool(self._physical & MOD_VKS[mod])
+
     def wait_mouse_release(self, button: str, timeout: float = 3.0) -> None:
-        event = self._swallowed.get(button)
+        event = self._released.get(button)
         if event:
             event.wait(timeout)
 

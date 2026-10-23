@@ -20,6 +20,9 @@ class Clipboard:
     def __init__(self, wait_ms: int = 300, controller=None):
         self.wait_ms = wait_ms
         self._controller = controller
+        # Set by the app to the hotkey hook's view of the real keyboard; without it, modifiers we
+        # lift are not pressed again (better a released key than one stuck down)
+        self.physically_down = None
 
     @property
     def controller(self):
@@ -31,34 +34,40 @@ class Clipboard:
 
     # -- keys -----------------------------------------------------------
     def _held_modifiers(self):
-        """Shift/Alt/Win keys physically held right now (the hotkey's own modifiers)."""
+        """Shift/Alt/Win keys that are down right now (the hotkey's own modifiers): (name, key)."""
         from pynput.keyboard import Key
 
         held = []
         if winapi.key_down(winapi.VK_SHIFT):
-            held.append(Key.shift)
+            held.append(("shift", Key.shift))
         if winapi.key_down(winapi.VK_MENU):
-            held.append(Key.alt)
+            held.append(("alt", Key.alt))
         if winapi.key_down(winapi.VK_LWIN) or winapi.key_down(winapi.VK_RWIN):
-            held.append(Key.cmd)
+            held.append(("win", Key.cmd))
         return held
 
     def send_ctrl(self, char: str) -> None:
         """Press Ctrl+<char> as if typed. Other held modifiers are lifted for the moment so
-        Ctrl+Shift+Space does not turn the Ctrl+C into Ctrl+Shift+C."""
+        Ctrl+Shift+Space does not turn the Ctrl+C into Ctrl+Shift+C. Afterwards they are pressed
+        again only if the user is still really holding them, so no key is left stuck down."""
         from pynput.keyboard import Key
 
         c = self.controller
         lifted = self._held_modifiers()
-        for key in lifted:
+        for _, key in lifted:
             c.release(key)
         try:
-            with c.pressed(Key.ctrl):
+            if winapi.key_down(winapi.VK_CONTROL):  # the user is holding Ctrl already
                 c.press(char)
                 c.release(char)
+            else:
+                with c.pressed(Key.ctrl):
+                    c.press(char)
+                    c.release(char)
         finally:
-            for key in lifted:
-                c.press(key)
+            for name, key in lifted:
+                if self.physically_down and self.physically_down(name):
+                    c.press(key)
 
     # -- clipboard ------------------------------------------------------
     def copy_selection(self) -> Selection | None:

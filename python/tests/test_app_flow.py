@@ -120,12 +120,11 @@ def test_compare_runs_one_at_a_time_with_ollama_and_shows_progress(app, ui, olla
     app.compare(ctx_for(app), "tabs")
     assert pump(ui, lambda: ui.windows)
     win = next(iter(ui.windows))
-    assert pump(ui, lambda: sum(j.done for j in win.jobs) == 1)
+    assert "Writing the first of 5" in win.progress.cget("text")
+    assert pump(ui, lambda: "1 of 5 ready" in win.progress.cget("text"))
     # the first finished answer is shown and can be used while the others are still coming
-    assert "1 of 5 ready" in win.progress.cget("text")
     assert str(win.use_btn.cget("state")) == "normal" and win.jobs[win.selected].done
-    assert pump(ui, lambda: all(j.done for j in win.jobs), 10)
-    assert win.progress.cget("text") == "All 5 ready"
+    assert pump(ui, lambda: win.progress.cget("text") == "All 5 ready", 10)
     chats = [r for r in ollama.requests if r["path"] == "/api/chat"]
     assert len(chats) == 5
     for before, after in zip(chats, chats[1:]):
@@ -135,6 +134,7 @@ def test_compare_runs_one_at_a_time_with_ollama_and_shows_progress(app, ui, olla
 
 def test_closing_compare_stops_the_remaining_requests(app, ui, ollama):
     ollama.delay = 0.3
+    app.clip.text = "closing test"
     app.compare(ctx_for(app), "list")
     assert pump(ui, lambda: ui.windows)
     win = next(iter(ui.windows))
@@ -144,7 +144,9 @@ def test_closing_compare_stops_the_remaining_requests(app, ui, ollama):
     t = __import__("time").time()
     while __import__("time").time() - t < 1.0:
         ui.root.update()
-    assert len([r for r in ollama.requests if r["path"] == "/api/chat"]) <= 2
+    mine = [r for r in ollama.requests if r["path"] == "/api/chat"
+            and r["body"]["messages"][-1]["content"] == "closing test"]
+    assert len(mine) <= 2  # the one finished, maybe the one already started; not the other 3
 
 
 def test_compare_marks_incompatible(app, ui):

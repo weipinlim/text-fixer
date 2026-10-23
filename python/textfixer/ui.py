@@ -363,9 +363,14 @@ class CompareWindow(tk.Toplevel):
     def refresh(self) -> None:
         if not self.winfo_exists():
             return
-        ready = sum(1 for j in self.jobs if j.done)
-        self.progress.configure(text=f"All {len(self.jobs)} ready" if ready == len(self.jobs)
-                                else f"{ready} of {len(self.jobs)} ready - you can pick a finished one now")
+        ready, total = sum(1 for j in self.jobs if j.done), len(self.jobs)
+        if ready == total:
+            progress = f"All {total} ready"
+        elif ready == 0:
+            progress = f"Writing the first of {total} versions..."
+        else:
+            progress = f"{ready} of {total} ready - you can pick a finished one now"
+        self.progress.configure(text=progress)
         if self.mode == "tabs":
             # Until you pick a tab yourself, show the first finished answer
             if not self.user_picked_tab and not self.jobs[self.selected].done:

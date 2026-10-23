@@ -37,6 +37,8 @@ class App:
         self.clip = clip or Clipboard(int(cfg.number("SELECTION_WAIT_MS", 300)))
         self.llm = llm or LLMClient(cfg)
         self.hk = hotkeys or HotkeyManager(self.on_hotkey)
+        if hasattr(self.hk, "physically_down"):
+            self.clip.physically_down = self.hk.physically_down
         self.busy = False
         self.registered: list[tuple[str, Combo]] = []
         self.hotkey_errors: list[str] = []

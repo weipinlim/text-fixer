@@ -111,6 +111,10 @@ code-signed, so Windows SmartScreen or antivirus may warn on first run.
 
 ## Troubleshooting
 
+- **A key or the mouse seems stuck (nothing can be clicked)**: quit TextFixer (tray icon > Quit, or
+  end it in Task Manager), then press and release Ctrl, Shift and Alt and click each mouse button
+  once. Please report it with what you pressed just before. (Versions before Oct 2026 had a bug that
+  swallowed mouse-button releases after a Ctrl+click; it is fixed.)
 - **"Cannot reach Ollama"**: start Ollama (Start menu), or check `API_URL`.
 - **"Ollama does not have the model ..."**: Settings > Download model, or `ollama pull <model>`.
 - **"Every tone at once" takes a while**: a model on your PC writes one answer at a time, so 5 tones
