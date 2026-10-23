@@ -1,11 +1,9 @@
-# TextFixer (Python)
+# TextFixer (Python, Ollama)
 
 The Python version of TextFixer. Select text in any app, press a hotkey, and the text is rewritten
-by an LLM. It can **run the model itself on your Intel Core Ultra NPU** (through OpenVINO GenAI) and
-serve it as an OpenAI-compatible API, or use any OpenAI-compatible server, Gemini or Ollama.
-
-It does the same things as the [AutoHotkey version](../README.md) and uses the same `config.ini`
-format, so you can move your tones and hotkeys between them:
+by an LLM running in **[Ollama](https://ollama.com)** on your PC (or any OpenAI-compatible server, or
+Gemini). It does the same things as the [AutoHotkey version](../README.md) and uses the same
+`config.ini` format, so tones and hotkeys move between them:
 
 - tone hotkeys (`Ctrl+1`..`Ctrl+5`) replace the selection; `Ctrl+Left click` runs the default tone
 - `Ctrl+Shift+Space`: popup with a "describe your change" box and a button per tone
@@ -15,136 +13,74 @@ format, so you can move your tones and hotkeys between them:
 - `Ctrl+Alt+Space`: chat window
 - tray icon: settings, pause hotkeys, start with Windows
 
-## 1. Install (Windows 11, Intel Core Ultra)
+> The earlier OpenVINO/NPU version of this app is on the branch `feature/python-npu`. This branch
+> replaces it with Ollama: Ollama is the model server, so there is no local API server, device
+> choice or model conversion to deal with.
 
-1. Install **Python 3.10 or newer** from python.org (it includes tkinter).
-2. Update the **Intel NPU driver** (Intel Core Ultra driver page, or Windows Update). Without a
-   current driver OpenVINO cannot see the NPU.
+## Install
+
+1. Install **Ollama** from https://ollama.com/download and start it (it runs in the background).
+2. Install **Python 3.10 or newer** from python.org (it includes tkinter).
 3. In this folder:
    ```
    python -m venv .venv
    .venv\Scripts\activate
    pip install -r requirements.txt
+   python -m textfixer
    ```
-4. Check that the NPU is found:
-   ```
-   python -m textfixer check
-   ```
-   You should see a line like `NPU: Intel(R) AI Boost`.
+4. The first run creates `config.ini` and opens **Settings**. Type a model name (for example
+   `llama3.2`) and click **Download model**; a window shows the progress. Then **Save and restart**.
 
-## 2. Get a model
-
-The NPU needs a model converted to OpenVINO format with **4-bit symmetric weights**. Two ways:
-
-- **Download one that is already converted** (easiest): the `OpenVINO` organisation on Hugging Face has
-  `-int4-ov` models, for example `OpenVINO/Qwen2.5-3B-Instruct-int4-ov`:
-  ```
-  pip install huggingface_hub
-  huggingface-cli download OpenVINO/Qwen2.5-3B-Instruct-int4-ov --local-dir models/qwen2.5-3b
-  ```
-  (Check the exact model name on huggingface.co; availability changes.)
-- **Convert one yourself:**
-  ```
-  pip install "optimum-intel[openvino]"
-  python -m textfixer convert --model Qwen/Qwen2.5-3B-Instruct --out models/qwen2.5-3b
-  ```
-  This runs `optimum-cli export openvino ... --weight-format int4 --sym --ratio 1.0 --group-size -1`
-  (channel-wise, which is what the NPU prefers; use `--group-size 128` for larger models if the
-  NPU rejects the default).
-
-Pick an **instruction/chat** model that fits your NPU. As a rule of thumb, 1.5B to 3B models are
-comfortable on Core Ultra Series 1, and 7B to 8B models need a newer chip with more memory. See the
-[OpenVINO GenAI NPU guide](https://docs.openvino.ai/) for the models it lists as supported.
-
-## 3. Run
-
+Check any time that everything is connected:
 ```
-python -m textfixer
+python -m textfixer check
 ```
+It says whether Ollama is reachable and the model is installed.
 
-The first run creates `config.ini` from `config.example.ini` and opens the **Settings** window. Point
-**Local model folder** at your model (for example `models\qwen2.5-3b`) and save; it restarts.
+Which model? A 3B to 8B instruction model is a good start: `llama3.2` (3B), `qwen2.5:3b`,
+`gemma2:2b`, `llama3.1:8b` for a stronger PC. Browse https://ollama.com/library. Smaller models are
+faster but make more mistakes.
 
-On the **first start the NPU compiles the model, which can take several minutes**. A tooltip says
-"Model ready" when it is done, and the compiled model is cached in `.ov_cache`, so later starts are
-fast. If the NPU cannot load the model, the app tries the GPU and then the CPU (`DEVICE=NPU,GPU,CPU`).
+## Settings that matter
 
-The app and the API server run in one process. The API is at `http://127.0.0.1:8000/v1`, so any
-other tool (including the AutoHotkey version: `PROVIDER=openai`, `API_URL=http://127.0.0.1:8000/v1/chat/completions`)
-can use the same model.
+- `PROVIDER=ollama` (default), `openai` (any OpenAI-compatible server) or `gemini`.
+- `MODEL`: the Ollama model name (see `ollama list`).
+- `API_URL`: leave empty for Ollama on this PC. For Ollama on another PC use `http://ADDRESS:11434`
+  (Ollama only listens on the local PC unless you set `OLLAMA_HOST` there).
+- `KEEP_ALIVE=30m`: how long Ollama keeps the model in memory after your last request. The first
+  request after it unloads is slow because the model loads again.
+- `TIMEOUT=120`: seconds to wait for an answer (the first request also loads the model).
 
-### Other ways to run it
-
-| Command | What it does |
-|---|---|
-| `python -m textfixer` | the app and the local API server (default) |
-| `python -m textfixer serve` | only the API server (no hotkeys, no windows) |
-| `python -m textfixer app` | only the app, using the provider/URL in `config.ini` (no local model) |
-| `python -m textfixer check` | list OpenVINO devices, check the model folder |
-| `python -m textfixer --backend echo` | no model: answers with your own text. Handy to try the hotkeys and windows |
-
-To run without a console window, use `pythonw -m textfixer`, or tray menu → **Start with Windows**.
+Everything else (hotkeys, tones, `EXCLUDE_APPS`) works as in the AutoHotkey version. Hotkey syntax:
+`^` Ctrl, `!` Alt, `+` Shift, `#` Win, then a key or `LButton`/`RButton`/`MButton`.
 
 ## Make a standalone .exe (no Python needed on other PCs)
 
-On a Windows PC with Python 3.10+ installed, double-click `build_exe.bat` in this folder (or run it
-in a terminal). It creates a virtual environment, installs the requirements and PyInstaller, and
-builds `dist\TextFixer\`:
+On a Windows PC with Python 3.10+, double-click `build_exe.bat` in this folder. It creates a virtual
+environment, installs the requirements and PyInstaller, and builds `dist\TextFixer\`:
 
 - `TextFixer.exe`: the app, no console window (errors go to `textfixer.log` next to it)
-- `TextFixerCLI.exe`: the same program with a console, for `check`, `serve` and seeing errors
+- `TextFixerCLI.exe`: the same program with a console, for `check` and seeing errors
 - `config.example.ini`: the first run copies it to `config.ini` and opens Settings
-- `models\`: put your OpenVINO model folder here (the default `MODEL_DIR=models/model` is relative to
-  `config.ini`, so the folder can live anywhere as long as the path is right)
 
-Copy the whole `dist\TextFixer` folder to another PC (also on the same Intel NPU driver) and run it.
-The build is a few hundred MB because it contains OpenVINO and its NPU/GPU/CPU plugins. It is not
+Copy the whole `dist\TextFixer` folder to another PC (which also needs Ollama) and run it. It is not
 code-signed, so Windows SmartScreen or antivirus may warn on first run.
-
-I could only test the build on Linux (it ran: `TextFixerCLI check` found OpenVINO, `serve` answered
-requests, the app opened its first-run Settings). The Windows build and the NPU itself are for you
-to test. If `build_exe.bat` fails, send me the last lines it prints.
-
-## Using another provider
-
-In Settings (or `config.ini`) set `PROVIDER`:
-
-- `local`: the model on this PC (default; see `[Server]`)
-- `openai`: any OpenAI-compatible server (vLLM, llama.cpp, LM Studio, ChatGPT...): set `API_URL` and `API_KEY`
-- `gemini`: Google Gemini: `API_KEY`, `MODEL` (leave `API_URL` empty)
-- `ollama`: a local Ollama (leave `API_URL` empty)
-
-## Settings that matter for the NPU (`[Server]`)
-
-- `DEVICE=NPU,GPU,CPU`: devices to try in order.
-- `MAX_PROMPT_LEN=2048`: **the NPU model is compiled for a fixed prompt size.** Texts longer than this
-  (in tokens) are refused with a clear message. Raise it for longer texts (it uses more memory and
-  recompiles once).
-- `MIN_RESPONSE_LEN=256`, `MAX_NEW_TOKENS=1024`: room for the answer.
-- The NPU decodes **greedily**, so `TEMPERATURE` has no effect there (it does on GPU/CPU).
-- Requests are handled **one at a time**. "Every tone at once" (`Ctrl+Shift+click`) sends one
-  request per tone, so on the NPU they run one after another and the answers appear as they finish.
-- `API_KEY`: if set, clients must send it. Keep `HOST=127.0.0.1` unless you want other PCs to use
-  the model (then also set an `API_KEY`).
 
 ## Differences from the AutoHotkey version
 
-- Hotkeys use the same syntax (`^+Space`, `^LButton`...). On Windows the matched key or click is
-  swallowed and passed through to the app if nothing is selected, like the AutoHotkey version. This
-  uses low-level hooks and is the part most worth testing on your PC.
+- On Windows the matched hotkey or click is swallowed and passed through to the app when nothing is
+  selected, like the AutoHotkey version. This uses low-level hooks and is the part most worth testing
+  on your PC.
 - Only **text** on the clipboard is saved and restored (images or files on the clipboard are lost
   when a hotkey runs). The AutoHotkey version restores everything.
-- The Settings window restarts the app when you save.
-- Windows only for the hotkeys' pass-through and "Start with Windows". The API server also runs on
-  Linux and macOS.
+- The Settings window restarts the app when you save, and can download Ollama models.
 
 ## Troubleshooting
 
-- **`NPU: not available on this PC`** in the log: update the Intel NPU driver and check Device
-  Manager > Neural processors. Use `DEVICE=GPU,CPU` meanwhile.
-- **The model fails to load on the NPU**: try a smaller model or `--group-size 128` when converting,
-  and make sure `openvino-genai` is recent (`pip install -U openvino-genai`).
-- **"The text is too long for the NPU model"**: raise `MAX_PROMPT_LEN`.
+- **"Cannot reach Ollama"**: start Ollama (Start menu), or check `API_URL`.
+- **"Ollama does not have the model ..."**: Settings > Download model, or `ollama pull <model>`.
+- **The first answer is slow**: the model is loading into memory. Later ones are faster until
+  `KEEP_ALIVE` runs out.
 - **Nothing happens on a hotkey**: another program may own it. Change it in Settings. The tray
   icon's **Show hotkeys** lists what is active.
 - **A hotkey acts on the wrong app or pastes nothing**: some apps (Excel, VS Code) copy even with no
@@ -153,8 +89,8 @@ In Settings (or `config.ini`) set `PROVIDER`:
 ## Tests
 
 ```
-pip install pytest httpx
+pip install pytest
 python -m pytest tests
 ```
-The window tests need a display (on Linux: `xvfb-run -a python -m pytest tests`). They use a dummy
-model, so no NPU is needed.
+The window tests need a display (on Linux: `xvfb-run -a python -m pytest tests`). They use a small
+mock Ollama, so Ollama itself is not needed.

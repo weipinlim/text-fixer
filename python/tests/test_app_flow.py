@@ -3,6 +3,7 @@ import pytest
 
 from textfixer.app import App
 from textfixer.hotkeys import parse_hotkey
+from textfixer.llm import LLMClient
 from textfixer.ui import CompareWindow, Context, PopupWindow, ResultWindow
 
 from conftest import FakeClipboard, FakeHotkeys, pump, run_thread
@@ -140,11 +141,63 @@ def test_busy_hotkey_passes_through(app, ui):
     assert called and not app.clip.pasted
 
 
-def test_local_model_not_ready_message(app, ui):
-    app.server_status = "loading"
+def test_startup_check_missing_model_and_unreachable(app, ui):
+    app.cfg.update("Settings", {"MODEL": "mistral"})
+    app.check_ollama()
+    assert pump(ui, lambda: ui._tip is not None and "does not have the model 'mistral'" in ui._tip.winfo_children()[0].cget("text"))
+    ui.hide_tip()
+    app.cfg.update("Settings", {"MODEL": "llama3.2", "API_URL": "http://127.0.0.1:18999"})
+    app.llm = LLMClient(app.cfg)
+    app.check_ollama()
+    assert pump(ui, lambda: ui._tip is not None and "Cannot reach Ollama" in ui._tip.winfo_children()[0].cget("text"))
+
+
+def test_startup_check_is_silent_when_all_is_well(app, ui):
+    app.check_ollama()
+    ui.root.update()
+    assert ui._tip is None
+
+
+def test_request_failure_shows_error_and_restores_clipboard(app, ui, monkeypatch):
+    shown = []
+    monkeypatch.setattr(ui, "error", lambda message, title="TextFixer": shown.append(message))
+    app.cfg.update("Settings", {"MODEL": "nope"})
     app.on_hotkey("preset1", parse_hotkey("^1"))
-    assert pump(ui, lambda: ui._tip is not None and "loading" in ui._tip.winfo_children()[0].cget("text"))
-    assert app.clip.pasted == [] and app.clip.restored == ["SAVED"]
+    assert pump(ui, lambda: shown)
+    assert "ollama pull nope" in shown[0] and app.clip.pasted == [] and app.clip.restored == ["SAVED"]
+    assert app.busy is False
+
+
+def test_settings_window_models_download_and_save(app, ui, ollama, monkeypatch):
+    from textfixer.ui import PullWindow, SettingsWindow
+
+    saved = []
+    win = SettingsWindow(ui, app, lambda: saved.append(True))
+    assert pump(ui, lambda: win.model_box.cget("values"))
+    assert list(win.model_box.cget("values")) == ["llama3.2:latest", "qwen2.5:3b"]
+    assert "2 model(s)" in win.status.cget("text")
+
+    win.model.set("phi3")
+    win.download()
+    pull = next(w for w in ui.root.winfo_children() if isinstance(w, PullWindow))
+    assert pump(ui, lambda: pull.status.cget("text").startswith("Done"))
+    assert "phi3:latest" in ollama.installed and pump(ui, lambda: "phi3:latest" in win.model_box.cget("values"))
+
+    win.vars["TEMPERATURE"].set("0.7")
+    win.provider.set("ollama")
+    win.save()
+    assert saved == [True] and app.cfg.setting("TEMPERATURE") == "0.7" and app.cfg.setting("MODEL") == "phi3"
+
+
+def test_settings_cancel_changes_nothing(app, ui):
+    from textfixer.ui import SettingsWindow
+
+    win = SettingsWindow(ui, app, lambda: None)
+    win.vars["API_URL"].set("http://127.0.0.1:18999")
+    win.refresh_models()  # tries the typed (unsaved) address
+    assert pump(ui, lambda: "Cannot reach Ollama" in win.status.cget("text"), 10)
+    win.destroy()
+    assert app.cfg.setting("API_URL") == "http://127.0.0.1:18766"
 
 
 def test_hotkey_registration_and_errors(cfg, ui):

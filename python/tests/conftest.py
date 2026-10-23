@@ -1,26 +1,74 @@
+import json
 import shutil
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from textfixer.backend import EchoBackend  # noqa: E402
 from textfixer.clipboard import Selection  # noqa: E402
 from textfixer.config import INCOMPATIBLE_MARK, Config  # noqa: E402
 
+PORT = 18766
 
-class GibberishAware(EchoBackend):
-    """Echo, but refuses text containing GIBBERISH the way a model would."""
 
-    def generate(self, messages, params, on_text=None):
-        res = super().generate(messages, params, on_text)
-        if any("GIBBERISH" in m["content"] for m in messages if m["role"] == "user"):
-            res.text = INCOMPATIBLE_MARK
-        return res
+class MockOllama(ThreadingHTTPServer):
+    """Speaks the few Ollama endpoints TextFixer uses. Answers with the last user message."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", PORT), MockHandler)
+        self.requests: list[dict] = []
+        self.installed = ["llama3.2:latest", "qwen2.5:3b"]
+
+
+class MockHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def _send(self, status, payload):
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path == "/api/tags":
+            self._send(200, {"models": [{"name": n} for n in self.server.installed]})
+        else:
+            self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
+        self.server.requests.append({"path": self.path, "body": body})
+        if self.path == "/api/pull":
+            self.send_response(200)
+            self.end_headers()
+            if body["model"] == "broken":
+                self.wfile.write(b'{"error": "pull model manifest: file does not exist"}\n')
+                return
+            for status, done in (("pulling manifest", None), ("pulling abc", 50), ("pulling abc", 100), ("success", None)):
+                event = {"status": status}
+                if done is not None:
+                    event.update(total=100, completed=done)
+                self.wfile.write((json.dumps(event) + "\n").encode())
+                self.wfile.flush()
+            self.server.installed.append(body["model"] + ":latest")
+            return
+        if self.path != "/api/chat":
+            return self._send(404, {"error": "not found"})
+        if body["model"] not in ("llama3.2", "qwen2.5:3b"):
+            return self._send(404, {"error": f"model '{body['model']}' not found"})
+        last = next(m["content"] for m in reversed(body["messages"]) if m["role"] == "user")
+        if "SLOW" in last:
+            time.sleep(0.5)
+        text = INCOMPATIBLE_MARK if "GIBBERISH" in last else f"ECHO: {last}"
+        self._send(200, {"model": body["model"], "message": {"role": "assistant", "content": text}, "done": True})
 
 
 class FakeClipboard:
@@ -55,22 +103,22 @@ class FakeHotkeys:
 
 
 @pytest.fixture(scope="session")
-def server():
-    from textfixer.server import ServerThread
-
-    srv = ServerThread(GibberishAware("m"), "127.0.0.1", 18766)
-    srv.start()
-    yield srv
-    srv.stop()
+def ollama():
+    server = MockOllama()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
 
 
 @pytest.fixture
-def cfg(tmp_path, server):
+def cfg(tmp_path, ollama):
+    ollama.requests.clear()
+    ollama.installed[:] = ["llama3.2:latest", "qwen2.5:3b"]
     path = tmp_path / "config.ini"
     shutil.copyfile(Path(__file__).resolve().parent.parent / "config.example.ini", path)
     c = Config(path)
-    c.update("Settings", {"PROVIDER": "local", "TIMEOUT": "10"})
-    c.update("Server", {"PORT": "18766"})
+    c.update("Settings", {"PROVIDER": "ollama", "API_URL": f"http://127.0.0.1:{PORT}", "TIMEOUT": "10"})
     return c
 
 

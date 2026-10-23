@@ -34,11 +34,10 @@ class App:
     def __init__(self, cfg: Config, ui: Ui, clip: Clipboard | None = None, llm: LLMClient | None = None,
                  hotkeys: HotkeyManager | None = None):
         self.cfg, self.ui = cfg, ui
-        self.clip = clip or Clipboard(int(cfg.number("Settings", "SELECTION_WAIT_MS", 300)))
+        self.clip = clip or Clipboard(int(cfg.number("SELECTION_WAIT_MS", 300)))
         self.llm = llm or LLMClient(cfg)
         self.hk = hotkeys or HotkeyManager(self.on_hotkey)
         self.busy = False
-        self.server_status = "ready"  # "loading" / "failed: ..." while the local model starts
         self.registered: list[tuple[str, Combo]] = []
         self.hotkey_errors: list[str] = []
         self.on_restart = self.restart
@@ -77,14 +76,17 @@ class App:
             self.ui.call(self.ui.error, "Some hotkeys are not valid:\n\n" + "\n".join(self.hotkey_errors))
 
     # -- helpers ---------------------------------------------------------------
-    def ready(self) -> bool:
-        """The local model must be loaded before the local provider can answer."""
-        if self.cfg.provider == "local" and self.server_status != "ready":
-            msg = ("The local model is still loading... (the first start on the NPU can take a few minutes)"
-                   if self.server_status == "loading" else f"The local model is not available: {self.server_status}")
-            self.ui.call(self.ui.show_tip, msg, 4)
-            return False
-        return True
+    def check_ollama(self) -> None:
+        """At start-up: is Ollama running, and is the chosen model installed? (runs in a thread)"""
+        if self.cfg.provider != "ollama":
+            return
+        model = self.cfg.setting("MODEL")
+        try:
+            if not self.llm.has_model(model):
+                self.ui.call(self.ui.show_tip, f"Ollama does not have the model '{model}' yet.\n"
+                             "Open Settings (tray icon) and click Download model.", 8)
+        except Exception as exc:
+            self.ui.call(self.ui.show_tip, f"Cannot reach Ollama.\nStart Ollama, then try a hotkey again.\n({exc})", 8)
 
     def is_excluded(self, hwnd: int) -> bool:
         return winapi.process_name(hwnd).lower() in self.cfg.excluded_apps()
@@ -159,18 +161,13 @@ class App:
         threading.Thread(target=self.apply_tone, args=(custom, ctx, text), daemon=True).start()
 
     def _open_window(self, preset: Preset, original: str) -> None:
-        if self.ready():
-            ResultWindow(self.ui, self, preset.name, preset.prompt, original)
+        ResultWindow(self.ui, self, preset.name, preset.prompt, original)
 
     def open_chat(self) -> None:
-        if self.ready():
-            ResultWindow(self.ui, self, "Chat")
+        ResultWindow(self.ui, self, "Chat")
 
     def apply_tone(self, preset: Preset, ctx: Context, user_text: str = "") -> None:
         """Rewrite the selection with a tone and paste it over the selection."""
-        if not self.ready():
-            self.release(ctx)
-            return
         self.busy = True
         try:
             self.ui.call(self.ui.show_tip, f"{preset.name}...")
@@ -200,8 +197,6 @@ class App:
 
     def explain(self, ctx: Context) -> None:
         self.clip.restore(ctx.saved)
-        if not self.ready():
-            return
         self.busy = True
         try:
             self.ui.call(self.ui.show_tip, "Explaining...")
@@ -211,16 +206,13 @@ class App:
                 self.ui.call(self.ui.hide_tip)
                 self.ui.call(self.ui.error, f"Request failed:\n\n{exc}")
                 return
-            seconds = self.cfg.number("Settings", "EXPLAIN_SECONDS", 30)
+            seconds = self.cfg.number("EXPLAIN_SECONDS", 30)
             self.ui.call(self.ui.show_tip, answer.strip(), seconds)
         finally:
             self.busy = False
 
     def compare(self, ctx: Context, mode: str) -> None:
         """Run every tone on the selection and show the answers as they come in."""
-        if not self.ready():
-            self.release(ctx)
-            return
         jobs = [Job(p) for p in self.cfg.tones]
         if not jobs:
             self.release(ctx)
@@ -264,7 +256,7 @@ class App:
             self.release(ctx)
 
     def show_settings(self) -> None:
-        SettingsWindow(self.ui, self.cfg, self.on_restart)
+        SettingsWindow(self.ui, self, self.on_restart)
 
     # -- tray actions -------------------------------------------------------------
     def toggle_pause(self) -> bool:

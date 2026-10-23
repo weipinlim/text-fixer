@@ -6,11 +6,11 @@ import gc
 import logging
 import queue
 import tkinter as tk
-from dataclasses import dataclass, field
-from tkinter import filedialog, messagebox
+from dataclasses import dataclass
+from tkinter import messagebox, ttk
 from typing import Callable
 
-from .config import FOLLOWUP_SYSTEM, INCOMPATIBLE_MARK, INCOMPATIBLE_RULE, Config, Preset
+from .config import FOLLOWUP_SYSTEM, Config, Preset
 from .markdown_tk import MarkdownView
 
 log = logging.getLogger("textfixer.ui")
@@ -413,69 +413,176 @@ def _one_line(text: str, limit: int = 60) -> str:
 # Settings
 # ---------------------------------------------------------------------------
 
-SETTINGS_FIELDS = [  # (section, key, label)
-    ("Settings", "API_URL", "API URL"),
-    ("Settings", "API_KEY", "API key"),
-    ("Settings", "MODEL", "Model"),
-    ("Settings", "TEMPERATURE", "Temperature"),
-    ("Settings", "TIMEOUT", "Timeout (s)"),
-    ("Settings", "EXCLUDE_APPS", "Hotkeys off in"),
-    ("Server", "MODEL_DIR", "Local model folder"),
-    ("Server", "DEVICE", "Devices (in order)"),
-    ("Server", "PORT", "Server port"),
-    ("Server", "MAX_PROMPT_LEN", "NPU max prompt tokens"),
-    ("Settings", "DEFAULT_HOTKEY", "Default tone"),
-    ("Settings", "POPUP_HOTKEY", "Popup"),
-    ("Settings", "MENU_HOTKEY", "Tone menu"),
-    ("Settings", "PREVIEW_HOTKEY", "All tones (tabs)"),
-    ("Settings", "RESULTS_MENU_HOTKEY", "All tones (list)"),
-    ("Settings", "EXPLAIN_HOTKEY", "Explain word"),
-    ("Settings", "CHAT_HOTKEY", "Chat window"),
+SETTINGS_FIELDS = [  # (key, label)
+    ("API_URL", "API URL (empty = default)"),
+    ("API_KEY", "API key"),
+    ("KEEP_ALIVE", "Keep model loaded"),
+    ("TEMPERATURE", "Temperature"),
+    ("TIMEOUT", "Timeout (s)"),
+    ("EXCLUDE_APPS", "Hotkeys off in"),
+    ("DEFAULT_HOTKEY", "Default tone"),
+    ("POPUP_HOTKEY", "Popup"),
+    ("MENU_HOTKEY", "Tone menu"),
+    ("PREVIEW_HOTKEY", "All tones (tabs)"),
+    ("RESULTS_MENU_HOTKEY", "All tones (list)"),
+    ("EXPLAIN_HOTKEY", "Explain word"),
+    ("CHAT_HOTKEY", "Chat window"),
 ]
 
 
+class _Overlay:
+    """A Config with a few values replaced (what is typed in the settings window)."""
+
+    def __init__(self, cfg: Config, **overrides: str):
+        self._cfg, self._over = cfg, overrides
+
+    @property
+    def provider(self) -> str:
+        return self._over.get("PROVIDER", self._cfg.provider)
+
+    def setting(self, key: str) -> str:
+        return self._over[key] if key in self._over else self._cfg.setting(key)
+
+    def number(self, key: str, default: float) -> float:
+        try:
+            return float(self.setting(key))
+        except ValueError:
+            return default
+
+
 class SettingsWindow(tk.Toplevel):
-    def __init__(self, ui: Ui, cfg: Config, on_saved: Callable[[], None]):
+    def __init__(self, ui: Ui, app, on_saved: Callable[[], None]):
         super().__init__(ui.root)
-        self.cfg, self.on_saved = cfg, on_saved
+        self.ui, self.app, self.cfg, self.on_saved = ui, app, app.cfg, on_saved
+        cfg = self.cfg
         self.title("TextFixer - Settings")
         self.resizable(False, False)
         body = tk.Frame(self, padx=10, pady=10)
         body.pack()
-        tk.Label(body, text="Provider", anchor="w", width=20).grid(row=0, column=0, sticky="w", pady=2)
+        tk.Label(body, text="Provider", anchor="w", width=24).grid(row=0, column=0, sticky="w", pady=2)
         self.provider = tk.StringVar(value=cfg.provider)
-        tk.OptionMenu(body, self.provider, "local", "openai", "gemini", "ollama").grid(row=0, column=1, sticky="we")
-        self.vars: dict[tuple, tk.StringVar] = {}
-        for i, (section, key, label) in enumerate(SETTINGS_FIELDS, start=1):
-            tk.Label(body, text=label, anchor="w", width=20).grid(row=i, column=0, sticky="w", pady=2)
-            var = tk.StringVar(value=cfg.setting(key) if section == "Settings" else cfg.server(key))
-            self.vars[(section, key)] = var
-            entry = tk.Entry(body, textvariable=var, width=46, show="*" if key == "API_KEY" else "")
-            entry.grid(row=i, column=1, sticky="we")
-            if key == "MODEL_DIR":
-                tk.Button(body, text="Browse...", command=self.browse).grid(row=i, column=2, padx=(4, 0))
-        hint = ("Provider: local = the model on this PC (NPU/GPU/CPU, see [Server]); openai = any OpenAI-compatible "
-                "server (set API URL); gemini = Google; ollama = local Ollama.\nHotkeys: ^ Ctrl, ! Alt, + Shift, "
-                "# Win; empty turns one off. Saving restarts TextFixer.")
-        tk.Label(body, text=hint, wraplength=560, justify="left", fg="#666").grid(
-            row=len(SETTINGS_FIELDS) + 1, column=0, columnspan=3, sticky="w", pady=8)
-        buttons = tk.Frame(body)
-        buttons.grid(row=len(SETTINGS_FIELDS) + 2, column=0, columnspan=3, sticky="w")
-        tk.Button(buttons, text="Save and restart", width=16, command=self.save).pack(side="left")
-        tk.Button(buttons, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
-        self.bind("<Escape>", lambda e: self.destroy())
+        tk.OptionMenu(body, self.provider, "ollama", "openai", "gemini").grid(row=0, column=1, sticky="we")
 
-    def browse(self) -> None:
-        folder = filedialog.askdirectory(parent=self, title="Folder with the OpenVINO model")
-        if folder:
-            self.vars[("Server", "MODEL_DIR")].set(folder)
+        tk.Label(body, text="Model", anchor="w", width=24).grid(row=1, column=0, sticky="w", pady=2)
+        self.model = tk.StringVar(value=cfg.setting("MODEL"))
+        self.model_box = ttk.Combobox(body, textvariable=self.model, width=43)
+        self.model_box.grid(row=1, column=1, sticky="we")
+        buttons = tk.Frame(body)
+        buttons.grid(row=1, column=2, padx=(4, 0))
+        tk.Button(buttons, text="Refresh", command=self.refresh_models).pack(side="left")
+        tk.Button(buttons, text="Download model", command=self.download).pack(side="left", padx=(4, 0))
+        self.status = tk.Label(body, text="", anchor="w", fg="#666")
+        self.status.grid(row=2, column=1, columnspan=2, sticky="w")
+
+        self.vars: dict[str, tk.StringVar] = {}
+        for i, (key, label) in enumerate(SETTINGS_FIELDS, start=3):
+            tk.Label(body, text=label, anchor="w", width=24).grid(row=i, column=0, sticky="w", pady=2)
+            var = tk.StringVar(value=cfg.setting(key))
+            self.vars[key] = var
+            tk.Entry(body, textvariable=var, width=46, show="*" if key == "API_KEY" else "").grid(
+                row=i, column=1, sticky="we")
+        last = len(SETTINGS_FIELDS) + 3
+        hint = ("Provider: ollama = Ollama on this PC (leave API URL empty; for another PC use "
+                "http://address:11434); openai = any OpenAI-compatible server (set API URL); gemini = Google "
+                "(set API key).\nHotkeys: ^ Ctrl, ! Alt, + Shift, # Win; empty turns one off. "
+                "Saving restarts TextFixer.")
+        tk.Label(body, text=hint, wraplength=620, justify="left", fg="#666").grid(
+            row=last, column=0, columnspan=3, sticky="w", pady=8)
+        bar = tk.Frame(body)
+        bar.grid(row=last + 1, column=0, columnspan=3, sticky="w")
+        tk.Button(bar, text="Save and restart", width=16, command=self.save).pack(side="left")
+        tk.Button(bar, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.refresh_models()
+
+    def _current_llm(self):
+        """An LLM client using what is typed in the window (nothing is saved or changed)."""
+        from .llm import LLMClient
+
+        return LLMClient(_Overlay(self.cfg, PROVIDER=self.provider.get(), MODEL=self.model.get().strip(),
+                                  API_URL=self.vars["API_URL"].get().strip(), API_KEY=self.vars["API_KEY"].get().strip()))
+
+    def refresh_models(self) -> None:
+        """Fill the model list from Ollama (in a thread: Ollama may be off)."""
+        self.status.configure(text="Looking for installed models...")
+        llm = self._current_llm()
+        self._refresh_id = getattr(self, "_refresh_id", 0) + 1
+        mine = self._refresh_id
+
+        def work():
+            try:
+                names, error = llm.list_models(), ""
+            except Exception:
+                names, error = [], "Cannot reach Ollama. Is it running? Start it, then click Refresh."
+            self.ui.call(self._models_found, names, error, mine)
+
+        import threading
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _models_found(self, names: list[str], error: str, request_id: int) -> None:
+        if not self.winfo_exists() or request_id != self._refresh_id:  # closed, or a newer refresh is running
+            return
+        self.model_box.configure(values=names)
+        self.status.configure(text=error or (f"{len(names)} model(s) installed in Ollama" if names else
+                                             "No models installed yet: type a name and click Download model"))
+
+    def download(self) -> None:
+        name = self.model.get().strip()
+        if not name:
+            return
+        PullWindow(self.ui, self._current_llm(), name, on_done=self.refresh_models)
 
     def save(self) -> None:
-        settings = {"PROVIDER": self.provider.get()}
-        server: dict[str, str] = {}
-        for (section, key), var in self.vars.items():
-            (settings if section == "Settings" else server)[key] = var.get().strip()
+        settings = {"PROVIDER": self.provider.get(), "MODEL": self.model.get().strip()}
+        for key, var in self.vars.items():
+            settings[key] = var.get().strip()
         self.cfg.update("Settings", settings)
-        self.cfg.update("Server", server)
         self.destroy()
         self.on_saved()
+
+
+class PullWindow(tk.Toplevel):
+    """Downloads an Ollama model and shows the progress."""
+
+    def __init__(self, ui: Ui, llm, name: str, on_done: Callable[[], None] | None = None):
+        super().__init__(ui.root)
+        self.ui, self.llm, self.name, self.on_done = ui, llm, name, on_done
+        self.title(f"Downloading {name}")
+        self.resizable(False, False)
+        self.status = tk.Label(self, text="Starting...", width=60, anchor="w", padx=10, pady=8)
+        self.status.pack()
+        self.bar = ttk.Progressbar(self, length=420, maximum=100)
+        self.bar.pack(padx=10)
+        self.close = tk.Button(self, text="Close", state="disabled", command=self.destroy)
+        self.close.pack(pady=10)
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # let the download finish
+        import threading
+
+        threading.Thread(target=self.work, daemon=True).start()
+
+    def work(self) -> None:
+        try:
+            for status, fraction in self.llm.pull_model(self.name):
+                self.ui.call(self.progress, status, fraction)
+            self.ui.call(self.finish, f"Done: '{self.name}' is installed.")
+        except Exception as exc:
+            self.ui.call(self.finish, f"Failed: {exc}")
+
+    def progress(self, status: str, fraction: float | None) -> None:
+        if not self.winfo_exists():
+            return
+        self.status.configure(text=status if fraction is None else f"{status}  {fraction:.0%}")
+        if fraction is not None:
+            self.bar.configure(value=fraction * 100)
+
+    def finish(self, message: str) -> None:
+        if not self.winfo_exists():
+            return
+        self.status.configure(text=message)
+        self.close.configure(state="normal")
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        if message.startswith("Done"):
+            self.bar.configure(value=100)
+            if self.on_done:
+                self.on_done()

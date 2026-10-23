@@ -1,4 +1,3 @@
-import json
 import threading
 
 import pytest
@@ -8,9 +7,9 @@ from textfixer.llm import LLMClient, LLMError
 from textfixer.markdown_tk import parse_inline, parse_markdown
 
 
-def cfg(tmp_path, settings="", server=""):
+def cfg(tmp_path, settings=""):
     p = tmp_path / "config.ini"
-    p.write_text(f"[Settings]\n{settings}\n[Server]\n{server}\n", encoding="utf-8")
+    p.write_text(f"[Settings]\n{settings}\n", encoding="utf-8")
     return Config(p)
 
 
@@ -22,9 +21,10 @@ def test_bodies(tmp_path):
     assert [x["role"] for x in b["contents"]] == ["user", "model", "user"]
     assert c.headers()["x-goog-api-key"] == "K" and "Authorization" not in c.headers()
     assert c.endpoint().endswith("/models/g:generateContent")
-    c = LLMClient(cfg(tmp_path, "PROVIDER=ollama\nMODEL=o"))
+    c = LLMClient(cfg(tmp_path, "PROVIDER=ollama\nMODEL=o"))  # the default provider
     b = c.body(msgs, "sys")
     assert b["messages"][0] == {"role": "system", "content": "sys"} and b["stream"] is False
+    assert b["keep_alive"] == "30m" and b["model"] == "o"
     assert c.endpoint() == "http://localhost:11434/api/chat"
     c = LLMClient(cfg(tmp_path, "PROVIDER=openai\nAPI_URL=http://x/v1/chat/completions\nAPI_KEY=K\nMODEL=m"))
     assert c.headers()["Authorization"] == "Bearer K"
@@ -33,10 +33,12 @@ def test_bodies(tmp_path):
         LLMClient(cfg(tmp_path, "PROVIDER=openai")).endpoint()
 
 
-def test_local_endpoint_and_key(tmp_path):
-    c = LLMClient(cfg(tmp_path, "PROVIDER=local", "HOST=0.0.0.0\nPORT=8123\nAPI_KEY=srv"))
-    assert c.endpoint() == "http://127.0.0.1:8123/v1/chat/completions"
-    assert c.headers()["Authorization"] == "Bearer srv"
+def test_ollama_address_forms(tmp_path):
+    for url in ("http://pc:11434", "http://pc:11434/", "pc:11434", "http://pc:11434/api/chat"):
+        c = LLMClient(cfg(tmp_path, f"PROVIDER=ollama\nAPI_URL={url}"))
+        assert c.endpoint() == "http://pc:11434/api/chat", url
+        assert c.ollama_base() == "http://pc:11434"
+    assert LLMClient(cfg(tmp_path, "PROVIDER=ollama\nKEEP_ALIVE=")).body([], "")  .get("keep_alive") is None
 
 
 def test_extract():
@@ -47,24 +49,41 @@ def test_extract():
         LLMClient.extract("openai", {"oops": 1})
 
 
-def test_round_trip_against_own_server(tmp_path):
-    from textfixer.backend import EchoBackend
-    from textfixer.server import ServerThread
+def test_round_trip_against_ollama(cfg, ollama):
+    c = LLMClient(cfg)
+    assert c.complete([{"role": "user", "content": 'h\u00e9llo "q"\nline2'}], "sys") == 'ECHO: h\u00e9llo "q"\nline2'
+    sent = ollama.requests[-1]["body"]
+    assert sent["messages"][0] == {"role": "system", "content": "sys"} and sent["keep_alive"] == "30m"
+    done = threading.Event()
+    box = []
+    c.complete_async([{"role": "user", "content": "async"}], "", lambda t, e: (box.append((t, e)), done.set()))
+    assert done.wait(5) and box[0] == ("ECHO: async", None)
 
-    srv = ServerThread(EchoBackend("m"), "127.0.0.1", 18765)
-    srv.start()
-    try:
-        c = LLMClient(cfg(tmp_path, "PROVIDER=local\nTIMEOUT=10", "PORT=18765"))
-        assert c.complete([{"role": "user", "content": 'héllo "q"\nline2'}], "sys") == 'ECHO: héllo "q"\nline2'
-        done = threading.Event()
-        box = []
-        c.complete_async([{"role": "user", "content": "async"}], "", lambda t, e: (box.append((t, e)), done.set()))
-        assert done.wait(5) and box[0] == ("ECHO: async", None)
-        bad = LLMClient(cfg(tmp_path, "PROVIDER=local\nTIMEOUT=2", "PORT=18999"))
-        with pytest.raises(LLMError, match="Cannot reach"):
-            bad.complete([{"role": "user", "content": "x"}])
-    finally:
-        srv.stop()
+
+def test_friendly_errors(cfg, tmp_path):
+    cfg.update("Settings", {"MODEL": "nope"})
+    with pytest.raises(LLMError, match="ollama pull nope"):
+        LLMClient(cfg).complete([{"role": "user", "content": "x"}])
+    down = LLMClient(cfg_down(tmp_path))
+    with pytest.raises(LLMError, match="Is Ollama running"):
+        down.complete([{"role": "user", "content": "x"}])
+    with pytest.raises(LLMError, match="Cannot reach"):
+        down.list_models()
+
+
+def cfg_down(tmp_path):
+    return cfg(tmp_path, "PROVIDER=ollama\nAPI_URL=http://127.0.0.1:18999\nTIMEOUT=2")
+
+
+def test_models_and_pull(cfg, ollama):
+    c = LLMClient(cfg)
+    assert c.list_models() == ["llama3.2:latest", "qwen2.5:3b"]
+    assert c.has_model("llama3.2") and c.has_model("qwen2.5:3b") and not c.has_model("mistral")
+    events = list(c.pull_model("mistral"))
+    assert events[0] == ("pulling manifest", None) and ("pulling abc", 0.5) in events and events[-1][0] == "success"
+    assert c.has_model("mistral")
+    with pytest.raises(LLMError, match="does not exist"):
+        list(c.pull_model("broken"))
 
 
 def test_inline_markdown():

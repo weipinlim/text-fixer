@@ -1,4 +1,4 @@
-"""config.ini handling. The format matches the AutoHotkey version, plus a [Server] section."""
+"""config.ini handling. The format matches the AutoHotkey version."""
 
 from __future__ import annotations
 
@@ -33,10 +33,11 @@ EXPLAIN_PROMPT = (
 )
 
 SETTINGS_DEFAULTS = {
-    "PROVIDER": "local",  # local | openai | gemini | ollama
+    "PROVIDER": "ollama",  # ollama | openai | gemini
     "API_URL": "",
     "API_KEY": "",
-    "MODEL": "local",
+    "MODEL": "llama3.2",
+    "KEEP_ALIVE": "30m",  # how long Ollama keeps the model in memory after the last request
     "TEMPERATURE": "0.2",
     "TIMEOUT": "120",
     "SELECTION_WAIT_MS": "300",
@@ -52,20 +53,6 @@ SETTINGS_DEFAULTS = {
     "EXPLAIN_SECONDS": "30",
     "EXPLAIN_PROMPT": "",
 }
-
-SERVER_DEFAULTS = {
-    "MODEL_DIR": "models/model",  # folder with the OpenVINO model (see README)
-    "MODEL_NAME": "local",  # model id reported by /v1/models
-    "DEVICE": "NPU,GPU,CPU",  # tried in this order; the first that loads is used
-    "HOST": "127.0.0.1",
-    "PORT": "8000",
-    "API_KEY": "",  # if set, clients must send it as a Bearer token
-    "MAX_PROMPT_LEN": "2048",  # NPU: longest prompt (tokens) the compiled model accepts
-    "MIN_RESPONSE_LEN": "256",  # NPU: room reserved for the answer (tokens)
-    "MAX_NEW_TOKENS": "1024",  # default answer limit when a request doesn't set one
-    "CACHE_DIR": ".ov_cache",  # compiled-model cache: makes later NPU starts much faster
-}
-
 
 @dataclass
 class Preset:
@@ -94,13 +81,9 @@ class Config:
     def setting(self, key: str) -> str:
         return self.parser.get("Settings", key, fallback=SETTINGS_DEFAULTS.get(key, "")).strip()
 
-    def server(self, key: str) -> str:
-        return self.parser.get("Server", key, fallback=SERVER_DEFAULTS.get(key, "")).strip()
-
-    def number(self, section: str, key: str, default: float) -> float:
-        raw = self.setting(key) if section == "Settings" else self.server(key)
+    def number(self, key: str, default: float) -> float:
         try:
-            return float(raw)
+            return float(self.setting(key))
         except ValueError:
             return default
 
@@ -111,12 +94,6 @@ class Config:
     @property
     def tones(self) -> list[Preset]:
         return [p for p in self.presets if p.mode != "window"]
-
-    def resolve_path(self, value: str) -> str:
-        """Relative paths in config.ini (model folder, cache) are relative to config.ini itself,
-        so the app works no matter which folder it was started from."""
-        path = Path(value).expanduser()
-        return str(path if path.is_absolute() else (self.path.resolve().parent / path))
 
     def default_preset(self) -> Preset:
         for preset in self.presets:

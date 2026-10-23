@@ -1,12 +1,7 @@
 # TextFixer (Python). Python 3.10+ on Windows 11 (tkinter is included with python.org's installer).
-openvino-genai>=2025.3   # runs the local model on the Intel NPU / GPU / CPU
-fastapi
-uvicorn
 pynput
 pyperclip
 pystray
 pillow
-# Only for `python -m textfixer convert` (turning a Hugging Face model into OpenVINO format):
-#   pip install "optimum-intel[openvino]"
 # Only for building the .exe (build_exe.bat installs it for you):
 #   pip install pyinstaller

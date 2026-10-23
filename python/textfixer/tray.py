@@ -40,7 +40,7 @@ def start_tray(app, config_path: str):
         Item("Pause hotkeys", toggle_pause, checked=lambda item: app.hk.paused),
     ]
     try:
-        import winreg  # noqa: F401 - only on Windows
+        import winreg  # noqa: F401  (only exists on Windows)
 
         items.append(Item("Start with Windows", toggle_startup, checked=lambda item: app.startup_enabled()))
     except ImportError:

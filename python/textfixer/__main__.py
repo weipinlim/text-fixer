@@ -1,11 +1,10 @@
-"""python -m textfixer [run|serve|app|check|convert]"""
+"""python -m textfixer [run|check]"""
 
 from __future__ import annotations
 
 import argparse
 import logging
 import os
-import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -22,57 +21,35 @@ def load_config(path: str | None) -> tuple[Config, bool]:
     return Config(ensure_config(target)), created
 
 
-def start_server(cfg: Config, backend_kind: str, block: bool):
-    from .backend import create_backend
-    from .server import ServerThread, serve
-
-    backend = create_backend(cfg, backend_kind)
-    host, port = cfg.server("HOST"), int(cfg.number("Server", "PORT", 8000))
-    key, max_new = cfg.server("API_KEY"), int(cfg.number("Server", "MAX_NEW_TOKENS", 1024))
-    logging.getLogger("textfixer").info("API server on http://%s:%s/v1 (model '%s' on %s)", host, port,
-                                        backend.model_name, backend.device)
-    if block:
-        serve(backend, host, port, key, max_new)
-        return None
-    server = ServerThread(backend, host, port, key, max_new)
-    server.start()
-    return server
-
-
-def cmd_serve(args) -> int:
-    cfg, _ = load_config(args.config)
-    start_server(cfg, args.backend, block=True)
-    return 0
-
-
 def cmd_check(args) -> int:
+    """Is Ollama running, and is the chosen model installed?"""
+    from .llm import LLMClient
+
     cfg, _ = load_config(args.config)
+    llm = LLMClient(cfg)
+    print(f"Provider: {cfg.provider}   Model: {cfg.setting('MODEL')}")
+    if cfg.provider != "ollama":
+        print("(the Ollama check only applies to PROVIDER=ollama)")
+        return 0
+    print(f"Ollama at {llm.ollama_base()}: ", end="")
     try:
-        import openvino as ov
-
-        core = ov.Core()
-        print("OpenVINO devices:")
-        for device in core.available_devices:
-            print(f"  {device}: {core.get_property(device, 'FULL_DEVICE_NAME')}")
-        if "NPU" not in core.available_devices:
-            print("  (no NPU found: update the Intel NPU driver, or use DEVICE=GPU,CPU)")
+        models = llm.list_models()
     except Exception as exc:
-        print("OpenVINO is not usable:", exc)
+        print("NOT reachable")
+        print(f"  {exc}")
+        print("  Install Ollama from https://ollama.com/download and make sure it is running.")
         return 1
-    model_dir = Path(cfg.server("MODEL_DIR"))
-    print(f"Model folder {model_dir}: {'found' if model_dir.exists() else 'NOT found (see README: convert or download a model)'}")
-    return 0
+    print("running")
+    print("Installed models:", ", ".join(models) or "(none)")
+    model = cfg.setting("MODEL")
+    if llm.has_model(model):
+        print(f"Model '{model}': installed")
+        return 0
+    print(f"Model '{model}': NOT installed. Download it in Settings, or run:  ollama pull {model}")
+    return 1
 
 
-def cmd_convert(args) -> int:
-    """Export a Hugging Face model to OpenVINO int4 (the format the NPU needs)."""
-    command = ["optimum-cli", "export", "openvino", "-m", args.model, "--weight-format", "int4", "--sym",
-               "--ratio", "1.0", "--group-size", str(args.group_size), "--trust-remote-code", args.out]
-    print("Running:", " ".join(command))
-    return subprocess.call(command)
-
-
-def cmd_app(args, with_server: bool) -> int:
+def cmd_run(args) -> int:
     from .app import App
     from .tray import start_tray
     from .ui import Ui
@@ -80,49 +57,26 @@ def cmd_app(args, with_server: bool) -> int:
     cfg, created = load_config(args.config)
     ui = Ui()
     app = App(cfg, ui)
-    config_path = str(cfg.path)
-    start_tray(app, config_path)
+    start_tray(app, str(cfg.path))
     app.start()
-
-    if with_server and cfg.provider == "local" and not cfg.setting("API_URL"):
-        app.server_status = "loading"
-
-        def load() -> None:
-            try:
-                start_server(cfg, args.backend, block=False)
-                app.server_status = "ready"
-                ui.call(ui.show_tip, f"Model ready. Hotkeys:\n{app.hotkey_summary()}", 6)
-            except Exception as exc:
-                logging.getLogger("textfixer").exception("model failed to load")
-                app.server_status = f"failed ({exc})"
-                ui.call(ui.error, f"The local model could not be loaded:\n\n{exc}\n\nSee the README (model folder, NPU "
-                                  "driver), or open Settings and use another provider.")
-
-        threading.Thread(target=load, daemon=True, name="model-loader").start()
-    else:
-        ui.call(ui.show_tip, f"TextFixer is running. Hotkeys:\n{app.hotkey_summary()}", 6)
     if created:
         ui.call(app.show_settings)
+    else:
+        ui.call(ui.show_tip, f"TextFixer is running. Hotkeys:\n{app.hotkey_summary()}", 6)
+        threading.Thread(target=app.check_ollama, daemon=True, name="ollama-check").start()
     ui.run()
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="textfixer", description=__doc__)
-    parser.add_argument("--config", help="path to config.ini (default: python/config.ini)")
-    parser.add_argument("--backend", choices=["openvino", "echo"], default="openvino",
-                        help="echo = no model, answers with your own text (to try the app)")
+    parser.add_argument("--config", help="path to config.ini (default: next to the program)")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("run", help="the app and the local API server (default)")
-    sub.add_parser("serve", help="only the local OpenAI-compatible API server")
-    sub.add_parser("app", help="only the app (uses the provider/URL from config.ini)")
-    sub.add_parser("check", help="list OpenVINO devices (is the NPU found?)")
-    conv = sub.add_parser("convert", help="convert a Hugging Face model to OpenVINO int4 for the NPU")
-    conv.add_argument("--model", required=True, help="e.g. Qwen/Qwen2.5-3B-Instruct")
-    conv.add_argument("--out", required=True, help="output folder, e.g. models/qwen2.5-3b")
-    conv.add_argument("--group-size", type=int, default=-1, help="-1 = channel-wise (NPU default), or 128")
+    sub.add_parser("run", help="start the app (default)")
+    sub.add_parser("check", help="is Ollama running and the model installed?")
     args = parser.parse_args(argv)
+
     level = logging.DEBUG if args.verbose else logging.INFO
     fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     if sys.stderr is None:  # the windowed .exe has no console: log to a file next to the config
@@ -130,14 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logging.basicConfig(level=level, format=fmt)
 
-    command = args.command or "run"
-    if command == "serve":
-        return cmd_serve(args)
-    if command == "check":
-        return cmd_check(args)
-    if command == "convert":
-        return cmd_convert(args)
-    return cmd_app(args, with_server=(command == "run"))
+    return cmd_check(args) if args.command == "check" else cmd_run(args)
 
 
 if __name__ == "__main__":
