@@ -3,3 +3,11 @@ config.ini
 
 # Compiled builds
 *.exe
+
+# Python version
+python/config.ini
+python/models/
+python/.ov_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
