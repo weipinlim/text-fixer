@@ -1,0 +1,85 @@
+# Builds TextFixer-AHK-Setup.exe (AutoHotkey version + Ollama + model download) on Windows.
+# TextFixer.exe is compiled with the official AutoHotkey compiler (Ahk2Exe).
+# Runs on pushes that change the AutoHotkey version, on demand (Actions tab > Build AutoHotkey
+# installer > Run workflow), and for tags like ahk-v1.0.0 (then the installer is attached to a
+# GitHub release).
+name: Build AutoHotkey installer
+
+on:
+  push:
+    paths:
+      - "ahk/**"
+      - ".github/workflows/ahk-installer.yml"
+    tags:
+      - "ahk-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A newer push to the same branch cancels a build that is still running
+concurrency:
+  group: ahk-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AHK_VERSION: "2.0.19"
+  AHK2EXE_URL: https://github.com/AutoHotkey/Ahk2Exe/releases/download/Ahk2Exe1.1.37.01c/Ahk2Exe1.1.37.01c.zip
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ahk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download AutoHotkey and its compiler
+        run: |
+          $tools = "$env:RUNNER_TEMP\ahk"
+          New-Item -ItemType Directory -Force "$tools\compiler" | Out-Null
+          Invoke-WebRequest "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$env:AHK_VERSION/AutoHotkey_$env:AHK_VERSION.zip" -OutFile "$tools\ahk.zip"
+          Invoke-WebRequest $env:AHK2EXE_URL -OutFile "$tools\ahk2exe.zip"
+          Expand-Archive "$tools\ahk.zip" "$tools"
+          Expand-Archive "$tools\ahk2exe.zip" "$tools\compiler"
+          "AHK_DIR=$tools" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Check the script
+        run: |
+          $p = Start-Process "$env:AHK_DIR\AutoHotkey64.exe" -ArgumentList '/ErrorStdOut', '/Validate', 'TextFixer.ahk' `
+            -NoNewWindow -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP\validate.txt"
+          Get-Content "$env:RUNNER_TEMP\validate.txt"
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: Compile TextFixer.exe
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" -replace "^ahk-v", "" } else { "0.1.0" }
+          (Get-Content TextFixer.ahk) -replace "^;@Ahk2Exe-SetVersion .*", ";@Ahk2Exe-SetVersion $v" | Set-Content TextFixer.ahk
+          New-Item -ItemType Directory -Force build | Out-Null
+          $p = Start-Process "$env:AHK_DIR\compiler\Ahk2Exe.exe" -Wait -PassThru -ArgumentList `
+            '/in', 'TextFixer.ahk', '/out', 'build\TextFixer.exe', '/base', "`"$env:AHK_DIR\AutoHotkey64.exe`"", '/compress', '0', '/silent', 'verbose'
+          if ($p.ExitCode -ne 0 -or -not (Test-Path build\TextFixer.exe)) { Write-Error "Ahk2Exe failed ($($p.ExitCode))"; exit 1 }
+          Get-Item build\TextFixer.exe | Format-List Name, Length, VersionInfo
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        run: |
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" -replace "^ahk-v", "" } else { "0.0.0-dev" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\TextFixer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TextFixer-AHK-Setup
+          path: |
+            ahk/build/installer/TextFixer-AHK-Setup.exe
+            ahk/build/TextFixer.exe
+
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ahk/build/installer/TextFixer-AHK-Setup.exe

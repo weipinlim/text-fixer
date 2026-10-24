@@ -11,3 +11,4 @@ python/.ov_cache/
 __pycache__/
 *.pyc
 .pytest_cache/
+ahk/build/

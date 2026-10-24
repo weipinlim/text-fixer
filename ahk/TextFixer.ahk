@@ -1,5 +1,11 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
+;@Ahk2Exe-SetName TextFixer
+;@Ahk2Exe-SetDescription TextFixer
+;@Ahk2Exe-SetCompanyName TextFixer
+;@Ahk2Exe-SetCopyright TextFixer
+;@Ahk2Exe-SetOrigFilename TextFixer.exe
+;@Ahk2Exe-SetVersion 0.1.0
 
 ; TextFixer - select text anywhere, press a preset hotkey, and the text is replaced
 ; with a rewritten version from your LLM (OpenAI-compatible/vLLM, Gemini or Ollama).
