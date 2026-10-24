@@ -60,16 +60,6 @@ def vk_for(key: str) -> int:
     raise ValueError(f"unsupported key '{key}'")
 
 
-def pynput_key(name: str):
-    """pynput key (character or Key.xxx) for a key name used in hotkeys."""
-    from pynput.keyboard import Key
-
-    if len(name) == 1:
-        return name
-    aliases = {"return": "enter", "escape": "esc", "pgup": "page_up", "pgdn": "page_down"}
-    return getattr(Key, aliases.get(name, name))
-
-
 def parse_hotkey(spec: str) -> Combo:
     m = re.fullmatch(r"([~$*<>^!+#]*)(\S+)", spec.strip())
     if not m:

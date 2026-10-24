@@ -1,5 +1,5 @@
 # TextFixer (Python). Python 3.10+ on Windows 11 (tkinter is included with python.org's installer).
-pynput
+pynput; sys_platform != "win32"   # Windows types keys with SendInput instead
 pyperclip
 pystray
 pillow

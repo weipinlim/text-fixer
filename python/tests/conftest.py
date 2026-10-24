@@ -83,7 +83,7 @@ class FakeClipboard:
         self.text = text
         self.pasted = []
         self.restored = []
-        self.controller = None
+        self.sender = None
 
     def copy_selection(self):
         return Selection(self.text, "SAVED") if self.text else None

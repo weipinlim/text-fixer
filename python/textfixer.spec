@@ -2,20 +2,23 @@
 #   pyinstaller --noconfirm textfixer.spec
 # Result: dist/TextFixer/ with TextFixer.exe (no console window) and TextFixerCLI.exe (with console,
 # for `check` and seeing errors). Put config.example.ini next to them.
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+WINDOWS = sys.platform == "win32"
 datas, binaries, hiddenimports = [], [], []
 
-# pynput and pystray pick their platform backend (win32 on Windows) with importlib at run time, so
-# PyInstaller cannot see it: collect every submodule.
-for package in ("pynput", "pystray"):
-    hiddenimports += collect_submodules(package)
+# pystray picks its platform backend with importlib at run time, so PyInstaller cannot see it
+hiddenimports += collect_submodules("pystray") + ["pystray._win32" if WINDOWS else "pystray._xorg"]
 hiddenimports += ["PIL._tkinter_finder", "darkdetect"]
 datas += collect_data_files("customtkinter")  # its colour themes and fonts
-# Named explicitly as well, so the build does not depend on being able to import them (the X11
-# ones need a display; they only matter for test builds on Linux)
-hiddenimports += ["pynput.keyboard._win32", "pynput.mouse._win32", "pynput._util.win32", "pystray._win32",
-                  "pynput.keyboard._xorg", "pynput.mouse._xorg", "pynput._util.xorg", "pystray._xorg"]
+excludes = ["torch", "tensorflow", "matplotlib", "scipy", "pandas", "IPython", "pytest", "numpy"]
+if WINDOWS:
+    # On Windows keys are sent with SendInput (textfixer/keys.py): no keyboard library in the build
+    excludes.append("pynput")
+else:  # Linux test builds use pynput, which also picks its backend at run time
+    hiddenimports += collect_submodules("pynput") + ["pynput.keyboard._xorg", "pynput._util.xorg"]
 
 a = Analysis(
     ["run_textfixer.py"],
@@ -23,10 +26,12 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["torch", "tensorflow", "matplotlib", "scipy", "pandas", "IPython", "pytest", "numpy"],
+    excludes=excludes,
 )
 pyz = PYZ(a.pure)
 
-gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TextFixer", console=False)
-cli = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TextFixerCLI", console=True)
-coll = COLLECT(gui, cli, a.binaries, a.datas, name="TextFixer")
+# File properties (Details tab): an .exe without them looks more suspicious to antivirus scanners
+version = "installer/version_info.txt" if WINDOWS else None
+gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TextFixer", console=False, upx=False, version=version)
+cli = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TextFixerCLI", console=True, upx=False, version=version)
+coll = COLLECT(gui, cli, a.binaries, a.datas, name="TextFixer", upx=False)

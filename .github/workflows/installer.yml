@@ -35,13 +35,29 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller pytest
+          pip install -r requirements.txt pytest
+          pip install pynput  # only for the tests; the Windows build itself sends keys with SendInput
+
+      # PyInstaller's ready-made loader is also used by a lot of malware, so antivirus scanners
+      # often flag it. Compiling our own copy from source avoids matching that signature.
+      - name: Install PyInstaller with a freshly compiled loader
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: pip install --no-binary pyinstaller "pyinstaller==6.22.3"
 
       - name: Run the tests
         run: python -m pytest -q tests
 
       - name: Build the app
-        run: pyinstaller --noconfirm --clean textfixer.spec
+        run: |
+          pip uninstall -y pynput  # make sure the build cannot pick it up
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.1.0" }
+          $parts = ($v -split "[^0-9]+" | Where-Object { $_ -ne "" } | Select-Object -First 3) + @("0", "0", "0")
+          $four = ($parts[0..2] + "0") -join "."
+          $tuple = ($parts[0..2] + "0") -join ", "
+          (Get-Content installer/version_info.txt) -replace "0\.1\.0\.0", $four -replace "\(0, 1, 0, 0\)", "($tuple)" |
+            Set-Content installer/version_info.txt
+          pyinstaller --noconfirm --clean textfixer.spec
 
       - name: Check the packaged app starts
         run: |

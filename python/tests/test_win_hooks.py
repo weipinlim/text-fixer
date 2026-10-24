@@ -116,25 +116,18 @@ def test_mouse_hotkeys_are_refused():
 
 # ---- Clipboard.send_ctrl must never leave a modifier stuck down ----------------------------
 
-class RecordingController:
+class RecordingSender:
     def __init__(self):
         self.events = []
 
-    def press(self, key):
-        self.events.append(("press", str(key)))
+    def press(self, vk):
+        self.events.append(("press", vk))
 
-    def release(self, key):
-        self.events.append(("release", str(key)))
+    def release(self, vk):
+        self.events.append(("release", vk))
 
-    def pressed(self, key):
-        import contextlib
 
-        @contextlib.contextmanager
-        def ctx():
-            self.press(key)
-            yield
-            self.release(key)
-        return ctx()
+SHIFT, CTRL, ALT, C = 0x10, 0x11, 0x12, 0x43
 
 
 def send(monkeypatch, logical_down, physically_down):
@@ -143,24 +136,45 @@ def send(monkeypatch, logical_down, physically_down):
 
     names = {VK_SHIFT: "shift", VK_MENU: "alt", VK_LWIN: "win", VK_CONTROL: "ctrl"}
     monkeypatch.setattr(clipboard.winapi, "key_down", lambda vk: names.get(vk) in logical_down)
-    c = clipboard.Clipboard(controller=RecordingController())
+    c = clipboard.Clipboard(sender=RecordingSender())
     c.physically_down = (lambda mod: mod in physically_down) if physically_down is not None else None
     c.send_ctrl("c")
-    return c.controller.events
+    return c.sender.events
 
 
 def test_lifted_shift_is_not_pressed_again_after_the_user_let_go(monkeypatch):
     events = send(monkeypatch, {"shift"}, physically_down=set())
-    assert events == [("release", "Key.shift"), ("press", "Key.ctrl"), ("press", "c"), ("release", "c"),
-                      ("release", "Key.ctrl")]
+    assert events == [("release", SHIFT), ("press", CTRL), ("press", C), ("release", C), ("release", CTRL)]
 
 
 def test_lifted_shift_is_restored_while_still_held(monkeypatch):
     events = send(monkeypatch, {"shift", "ctrl"}, physically_down={"shift", "ctrl"})
     # Ctrl is already down: it is not pressed/released again; Shift comes back since it is still held
-    assert events == [("release", "Key.shift"), ("press", "c"), ("release", "c"), ("press", "Key.shift")]
+    assert events == [("release", SHIFT), ("press", C), ("release", C), ("press", SHIFT)]
 
 
 def test_without_hook_information_nothing_is_pressed_again(monkeypatch):
     events = send(monkeypatch, {"alt"}, physically_down=None)
-    assert ("press", "Key.alt") not in events and events[0] == ("release", "Key.alt")
+    assert ("press", ALT) not in events and events[0] == ("release", ALT)
+
+
+def test_passthrough_types_the_whole_combination(monkeypatch):
+    import textfixer.clipboard as clipboard
+    from textfixer.hotkeys import parse_hotkey
+
+    monkeypatch.setattr(clipboard.winapi, "key_down", lambda vk: vk == SHIFT)  # Shift still held
+    s = RecordingSender()
+    clipboard.send_combo(s, parse_hotkey("^+F1"))
+    assert s.events == [("press", CTRL), ("press", 0x70), ("release", 0x70), ("release", CTRL)]
+
+
+def test_sendinput_structures_have_the_windows_layout():
+    import ctypes
+
+    from textfixer.keys import input_structs, key_event
+
+    INPUT = input_structs()[0]
+    assert ctypes.sizeof(INPUT) == (40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)
+    up = key_event(0x2E, up=True)  # Delete: an extended key
+    assert up.type == 1 and up.u.ki.wVk == 0x2E and up.u.ki.dwFlags == 0x0003
+    assert key_event(0x43, up=False).u.ki.dwFlags == 0

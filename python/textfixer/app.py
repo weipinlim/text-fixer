@@ -112,7 +112,7 @@ class App:
         """The hotkey was not used (nothing selected...): give the keys to the app after all."""
         if combo is None or not self.hk.suppresses:
             return
-        self.hk.passthrough(combo, lambda: send_combo(self.clip.controller, combo))
+        self.hk.passthrough(combo, lambda: send_combo(self.clip.sender, combo))
 
     def release(self, ctx: Context) -> None:
         """Nothing was done with the selection: put the clipboard back."""
