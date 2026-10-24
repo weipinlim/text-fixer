@@ -90,7 +90,7 @@ faster but make more mistakes.
   for rewriting. Set `on` if you want the reasoning.
 
 Everything else (hotkeys, tones, `EXCLUDE_APPS`) works as in the AutoHotkey version. Hotkey syntax:
-`^` Ctrl, `!` Alt, `+` Shift, `#` Win, then a key or `LButton`/`RButton`/`MButton`.
+`^` Ctrl, `!` Alt, `+` Shift, `#` Win, then a key (letters, digits, `F1`..`F24`, `Space`, `Enter`...).
 
 ## Make a standalone .exe (no Python needed on other PCs)
 
