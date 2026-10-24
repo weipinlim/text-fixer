@@ -123,11 +123,11 @@ def parse_markdown(md: str) -> list[tuple]:
 class MarkdownView:
     """Renders Markdown into a (read-only) Text widget."""
 
-    def __init__(self, text: tk.Text, dark: bool = False):
+    def __init__(self, text: tk.Text, dark: bool = False, bg: str | None = None, family: str | None = None):
         self.text = text
         base = tkfont.nametofont("TkDefaultFont")
         size = max(base.cget("size"), 10)
-        family = base.cget("family")
+        family = family or base.cget("family")
         mono = tkfont.Font(family="Courier New", size=size - 1)
         self._fonts = {  # keep references so they are not garbage collected
             "base": tkfont.Font(family=family, size=size),
@@ -139,9 +139,11 @@ class MarkdownView:
             "h2": tkfont.Font(family=family, size=size + 4, weight="bold"),
             "h3": tkfont.Font(family=family, size=size + 2, weight="bold"),
         }
-        fg, bg = ("#e6e6e6", "#1e1e1e") if dark else ("#202020", "#ffffff")
+        fg, default_bg = ("#e6e6e6", "#1e1e1e") if dark else ("#202020", "#ffffff")
+        bg = bg or default_bg
         code_bg = "#2b2b2b" if dark else "#f1f1f1"
-        text.configure(font=self._fonts["base"], fg=fg, bg=bg, insertbackground=fg, wrap="word", padx=10, pady=8)
+        text.configure(font=self._fonts["base"], fg=fg, bg=bg, insertbackground=fg, wrap="word", padx=14, pady=10,
+                       borderwidth=0, highlightthickness=0, selectbackground="#3b82f6")
         t = text.tag_configure
         t("bold", font=self._fonts["bold"])
         t("italic", font=self._fonts["italic"])

@@ -162,7 +162,7 @@ def test_compare_marks_incompatible(app, ui):
 def test_explain_shows_tooltip(app, ui):
     ctx = ctx_for(app)
     run_thread(app.explain, ctx)
-    assert pump(ui, lambda: ui._tip is not None and "ECHO" in ui._tip.winfo_children()[0].cget("text"))
+    assert pump(ui, lambda: ui._tip is not None and "ECHO" in ui.tip_text())
     assert app.clip.restored[0] == "SAVED"
     ui.hide_tip()
 
@@ -178,12 +178,12 @@ def test_busy_hotkey_passes_through(app, ui):
 def test_startup_check_missing_model_and_unreachable(app, ui):
     app.cfg.update("Settings", {"MODEL": "mistral"})
     app.check_ollama()
-    assert pump(ui, lambda: ui._tip is not None and "does not have the model 'mistral'" in ui._tip.winfo_children()[0].cget("text"))
+    assert pump(ui, lambda: ui._tip is not None and "does not have the model 'mistral'" in ui.tip_text())
     ui.hide_tip()
     app.cfg.update("Settings", {"MODEL": "llama3.2", "API_URL": "http://127.0.0.1:18999"})
     app.llm = LLMClient(app.cfg)
     app.check_ollama()
-    assert pump(ui, lambda: ui._tip is not None and "Cannot reach Ollama" in ui._tip.winfo_children()[0].cget("text"))
+    assert pump(ui, lambda: ui._tip is not None and "Cannot reach Ollama" in ui.tip_text())
 
 
 def test_startup_check_is_silent_when_all_is_well(app, ui):
@@ -275,7 +275,7 @@ def test_popup_compare_and_explain_buttons(app, ui):
     win.close()
     app.show_popup(ctx_for(app))
     next(iter(ui.windows)).explain()
-    assert pump(ui, lambda: ui._tip is not None and "ECHO" in ui._tip.winfo_children()[0].cget("text"))
+    assert pump(ui, lambda: ui._tip is not None and "ECHO" in ui.tip_text())
 
 
 def test_passthrough_goes_to_the_hotkey_manager(app):

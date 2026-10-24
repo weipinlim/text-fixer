@@ -10,8 +10,8 @@ datas, binaries, hiddenimports = [], [], []
 # PyInstaller cannot see it: collect every submodule.
 for package in ("pynput", "pystray"):
     hiddenimports += collect_submodules(package)
-hiddenimports += ["PIL._tkinter_finder", "sv_ttk"]
-datas += collect_data_files("sv_ttk")  # the theme's .tcl files and images
+hiddenimports += ["PIL._tkinter_finder", "darkdetect"]
+datas += collect_data_files("customtkinter")  # its colour themes and fonts
 # Named explicitly as well, so the build does not depend on being able to import them (the X11
 # ones need a display; they only matter for test builds on Linux)
 hiddenimports += ["pynput.keyboard._win32", "pynput.mouse._win32", "pynput._util.win32", "pystray._win32",
