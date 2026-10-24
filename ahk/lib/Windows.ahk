@@ -263,6 +263,9 @@ RunPopup(hk, *) {
         btn := g.AddButton((Mod(A_Index - 1, 3) = 0 ? "xm" : "x+6") " w168", preset.index " " preset.name)
         btn.OnEvent("Click", PopupTone.Bind(preset))
     }
+    g.AddButton("xm w168", "Compare (tabs)").OnEvent("Click", PopupOpen.Bind(OpenPreview))
+    g.AddButton("x+6 w168", "Compare (list)").OnEvent("Click", PopupOpen.Bind(OpenResultsList))
+    g.AddButton("x+6 w168", "Explain").OnEvent("Click", PopupOpen.Bind(PopupExplain))
     g.OnEvent("Escape", (*) => PopupClose(true))
 
     POPUP := {gui: g, input: input, original: original, savedClip: savedClip, winId: winId, shown: A_TickCount}
@@ -302,6 +305,19 @@ PopupTone(preset, *) {
     RunTone(preset, state.original, state.savedClip)
 }
 
+; Close the popup and hand the selection to a compare window or the explanation
+PopupOpen(open, *) {
+    state := POPUP
+    PopupClose(false)
+    ActivateApp(state.winId)
+    open(state.original, state.savedClip)
+}
+
+PopupExplain(original, savedClip) {
+    A_Clipboard := savedClip
+    Explain(original)
+}
+
 PopupSend(*) {
     state := POPUP
     instruction := Trim(state.input.Value)
@@ -329,7 +345,6 @@ ShowSettings(firstRun := false) {
     fields := [
         ["API_URL", "API URL", "", ""],
         ["API_KEY", "API key", "", "Password"],
-        ["MODEL", "Model", "", ""],
         ["TEMPERATURE", "Temperature", "0.2", ""],
         ["TIMEOUT", "Timeout (s)", "60", ""],
         ["EXCLUDE_APPS", "Hotkeys off in", "EXCEL.EXE", ""],
@@ -341,33 +356,101 @@ ShowSettings(firstRun := false) {
         ["EXPLAIN_HOTKEY", "Explain word", "^MButton", ""],
         ["CHAT_HOTKEY", "Chat window", "^!Space", ""]
     ]
-    g.AddText("xm w150", "Provider")
+    g.AddText("xm ym w150 Section", "Provider")
     provider := g.AddDropDownList("x+8 w360", ["openai", "gemini", "ollama"])
-    try provider.Choose(StrLower(IniRead(CONFIG_FILE, "Settings", "PROVIDER", "openai")))
+    try provider.Choose(StrLower(IniRead(CONFIG_FILE, "Settings", "PROVIDER", "ollama")))
     if !provider.Value
         provider.Choose(1)
+
+    ; Model: a list of the models Ollama has downloaded (if it is running), or type any name
+    model := IniRead(CONFIG_FILE, "Settings", "MODEL", "")
+    models := []
+    if (provider.Text = "ollama")
+        try models := OllamaModels(OllamaBase(IniRead(CONFIG_FILE, "Settings", "API_URL", "")))
+    g.AddText("xm w150", "Model")
+    modelBox := g.AddComboBox("x+8 w262", models)
+    modelBox.Text := model
+    g.AddButton("x+6 w92", "Download").OnEvent("Click", (*) => SettingsDownload())
+
     edits := []
     for f in fields {
         g.AddText("xm w150", f[2])
         edits.Push(g.AddEdit("x+8 w360 " f[4], IniRead(CONFIG_FILE, "Settings", f[1], f[3])))
     }
     g.AddText("xm w520 r6", "Provider: openai = vLLM, llama.cpp, ChatGPT and other OpenAI-compatible servers; "
-        . "gemini = Google (leave API URL empty); ollama = local Ollama (API URL empty = localhost).`n"
-        . "Hotkeys: ^ Ctrl, ! Alt, + Shift, # Win. Leave empty to turn one off. Tones and their prompts are edited in config.ini.")
+        . "gemini = Google (leave API URL empty); ollama = local Ollama (API URL empty = localhost). "
+        . "Download gets the model with Ollama.`n"
+        . "Hotkeys: ^ Ctrl, ! Alt, + Shift, # Win. Leave empty to turn one off. Tone prompts are edited in config.ini.")
+
+    ; Second column: a shortcut for each tone
+    g.AddText("ys w300 Section", "Tone shortcuts")
+    tones := []
+    Loop MAX_PRESETS {
+        section := "Preset" A_Index
+        name := IniRead(CONFIG_FILE, section, "NAME", "")
+        if (name = "")
+            continue
+        g.AddText("xs w150", A_Index ". " name)
+        tones.Push({section: section, name: name
+            , edit: g.AddEdit("x+8 w140", IniRead(CONFIG_FILE, section, "HOTKEY", ""))})
+    }
+
     g.AddButton("xm w100 Default", "Save").OnEvent("Click", SettingsSave)
     g.AddButton("x+8 w140", "Edit config.ini").OnEvent("Click", (*) => Run('notepad.exe "' CONFIG_FILE '"'))
     g.AddButton("x+8 w100", "Cancel").OnEvent("Click", SettingsClose)
     g.OnEvent("Close", SettingsClose)
     g.OnEvent("Escape", SettingsClose)
 
-    SETTINGS := {gui: g, fields: fields, edits: edits, provider: provider, firstRun: firstRun}
+    SETTINGS := {gui: g, fields: fields, edits: edits, provider: provider, model: modelBox
+        , tones: tones, firstRun: firstRun}
     g.Show()
 }
 
+SettingsDownload() {
+    name := Trim(SETTINGS.model.Text)
+    if (name = "") {
+        MsgBox("Type a model name first, for example qwen3:4b-instruct-2507-q4_K_M.", "TextFixer", "Icon!")
+        return
+    }
+    PullModel(name)
+}
+
+; "^+F1" and "+^F1" are the same shortcut: compare the key and the set of modifiers
+HotkeyKey(spec) {
+    RegExMatch(spec, "^([~$*<>^!+#]*)(.+)$", &m)
+    mods := ""
+    for mod in ["^", "!", "+", "#"]
+        if InStr(m[1], mod)
+            mods .= mod
+    return mods StrLower(m[2])
+}
+
 SettingsSave(*) {
+    ; Every hotkey (settings and tones) must be different
+    seen := Map()
+    check := []
+    for i, f in SETTINGS.fields
+        if InStr(f[1], "HOTKEY")
+            check.Push([f[2], Trim(SETTINGS.edits[i].Value)])
+    for tone in SETTINGS.tones
+        check.Push([tone.name, Trim(tone.edit.Value)])
+    for item in check {
+        if (item[2] = "")
+            continue
+        key := HotkeyKey(item[2])
+        if seen.Has(key) {
+            MsgBox("The shortcut " item[2] " is used twice: for " seen[key] " and for " item[1] ".`n`nChange one of them.", "TextFixer", "Icon!")
+            return
+        }
+        seen[key] := item[1]
+    }
+
     IniWrite(SETTINGS.provider.Text, CONFIG_FILE, "Settings", "PROVIDER")
+    IniWrite(Trim(SETTINGS.model.Text), CONFIG_FILE, "Settings", "MODEL")
     for i, f in SETTINGS.fields
         IniWrite(Trim(SETTINGS.edits[i].Value), CONFIG_FILE, "Settings", f[1])
+    for tone in SETTINGS.tones
+        IniWrite(Trim(tone.edit.Value), CONFIG_FILE, tone.section, "HOTKEY")
     Reload()
 }
 

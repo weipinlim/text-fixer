@@ -35,7 +35,7 @@ global TEMPERATURE   := IniRead(CONFIG_FILE, "Settings", "TEMPERATURE", "0.2")
 global TIMEOUT_SEC   := IniRead(CONFIG_FILE, "Settings", "TIMEOUT", "60")
 global SELECTION_MS  := IniRead(CONFIG_FILE, "Settings", "SELECTION_WAIT_MS", "300")
 global EXCLUDE_APPS  := IniRead(CONFIG_FILE, "Settings", "EXCLUDE_APPS", "")
-global PROVIDER      := StrLower(IniRead(CONFIG_FILE, "Settings", "PROVIDER", "openai"))
+global PROVIDER      := StrLower(IniRead(CONFIG_FILE, "Settings", "PROVIDER", "ollama"))
 
 if !IsNumber(TEMPERATURE)
     TEMPERATURE := "0.2"
@@ -177,6 +177,21 @@ A_TrayMenu.Add("Start with Windows", ToggleStartup)
 if FileExist(StartupLink())
     A_TrayMenu.Check("Start with Windows")
 TrayTip("Running. Select text and press a hotkey:`n" HotkeySummary(), "TextFixer")
+if (PROVIDER = "ollama")
+    SetTimer(CheckOllama, -1000)
+
+; Ollama: say so if it isn't running, and offer to download the model if it's missing
+CheckOllama() {
+    try models := OllamaModels(OllamaBase(API_URL))
+    catch {
+        TrayTip("Ollama isn't running. Start Ollama (or install it from ollama.com), then reload TextFixer.", "TextFixer", "Iconx")
+        return
+    }
+    if HasModel(models, MODEL)
+        return
+    if (MsgBox("The model " MODEL " isn't downloaded yet.`n`nDownload it now? (a few GB, a window shows the progress)", "TextFixer", "YesNo Icon?") = "Yes")
+        PullModel(MODEL)
+}
 
 ; Tray: turn all hotkeys off and on (Suspend), and start with Windows (Startup shortcut)
 TogglePause(*) {
@@ -290,26 +305,60 @@ IsExcludedApp() {
     return false
 }
 
-; Send the selection to every tone at once; PollJob collects the answers
+; Send the selection to every tone; PollJob collects the answers. A local Ollama
+; answers one request at a time anyway, so there the tones run one after another
+; (StartNextJob) and each result shows up as soon as it is ready.
 StartAll(original) {
     jobs := []
     for preset in TONES {
-        job := {preset: preset, text: "", error: "", done: false, start: A_TickCount}
-        try {
-            job.http := StartRequest(original, preset.prompt " " INCOMPATIBLE_RULE, true)
-        } catch as err {
-            job.done := true
-            job.error := err.Message
-        }
+        job := {preset: preset, original: original, http: "", text: "", error: "", done: false, start: 0}
         jobs.Push(job)
+        if (PROVIDER != "ollama" || A_Index = 1)
+            StartJob(job)
     }
     return jobs
+}
+
+StartJob(job) {
+    job.start := A_TickCount
+    try {
+        job.http := StartRequest(job.original, job.preset.prompt " " INCOMPATIBLE_RULE, true)
+    } catch as err {
+        job.done := true
+        job.error := err.Message
+    }
+}
+
+; Start the next waiting tone once nothing is running (Ollama only)
+StartNextJob(jobs) {
+    for job in jobs
+        if (job.start && !job.done)
+            return
+    for job in jobs
+        if !job.start {
+            StartJob(job)
+            return
+        }
+}
+
+; What a job shows while it has no result yet
+JobStatus(job) {
+    return job.start ? "Working..." : "Waiting for its turn..."
+}
+
+JobsReady(jobs) {
+    n := 0
+    for job in jobs
+        n += job.done
+    return n
 }
 
 ; Check whether a job's answer has arrived; returns true once it is finished
 PollJob(job) {
     if job.done
         return true
+    if !job.start
+        return false
     if HttpReady(job.http) {
         job.done := true
         try job.text := Trim(FinishRequest(job.http), " `t`r`n")
@@ -329,7 +378,6 @@ PollJob(job) {
 ; Run every tone and list the results in one small window at the cursor: each row
 ; shows the start of a result, hovering shows the full text, clicking uses it
 RunResultsMenu(hk, *) {
-    global PREVIEW
     if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
         PassThrough(hk)
         return
@@ -339,7 +387,11 @@ RunResultsMenu(hk, *) {
         PassThrough(hk)
         return
     }
+    OpenResultsList(original, savedClip)
+}
 
+OpenResultsList(original, savedClip) {
+    global PREVIEW
     winId := WinExist("A")
     CoordMode("Mouse", "Screen")
     MouseGetPos(&mx, &my)
@@ -349,7 +401,7 @@ RunResultsMenu(hk, *) {
     rows := []
     for job in jobs {
         g.AddText("xm w120 h24 0x200", job.preset.index ". " job.preset.name)
-        row := g.AddText("x+8 w520 h24 0x200 +0x100 +Border", "Working...")
+        row := g.AddText("x+8 w520 h24 0x200 +0x100 +Border", JobStatus(job))
         row.OnEvent("Click", PreviewUseTone.Bind(A_Index))
         rows.Push(row)
     }
@@ -357,7 +409,7 @@ RunResultsMenu(hk, *) {
     g.OnEvent("Close", PreviewClose)
     g.OnEvent("Escape", PreviewClose)
 
-    PREVIEW := {kind: "list", gui: g, jobs: jobs, rows: rows, tip: ""
+    PREVIEW := {kind: "list", gui: g, jobs: jobs, rows: rows, tip: "", title: g.Title
         , original: original, savedClip: savedClip, winId: winId}
     PreviewRefreshRows()
     ShowNearCursor(g, mx, my)
@@ -372,6 +424,8 @@ PreviewRefreshRows() {
             PREVIEW.rows[i].Text := "Error: " Snippet(job.error)
         else if job.done
             PREVIEW.rows[i].Text := Snippet(job.text)
+        else
+            PREVIEW.rows[i].Text := JobStatus(job)
     }
 }
 
@@ -424,7 +478,6 @@ Snippet(text) {
 ; Run every tone and show the results in a box next to the cursor, one tab
 ; per tone; "Use this" pastes the shown version over the selection
 RunPreview(hk, *) {
-    global PREVIEW
     if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
         PassThrough(hk)
         return
@@ -434,7 +487,11 @@ RunPreview(hk, *) {
         PassThrough(hk)
         return
     }
+    OpenPreview(original, savedClip)
+}
 
+OpenPreview(original, savedClip) {
+    global PREVIEW
     winId := WinExist("A")
     CoordMode("Mouse", "Screen")
     MouseGetPos(&mx, &my)
@@ -457,8 +514,8 @@ RunPreview(hk, *) {
     g.OnEvent("Escape", PreviewClose)
 
     PREVIEW := {kind: "tabs", gui: g, jobs: jobs, tabs: tabs, edit: edit, use: use, sel: 1
-        , original: original, savedClip: savedClip, winId: winId}
-    PreviewSelect(1)
+        , picked: false, title: g.Title, original: original, savedClip: savedClip, winId: winId}
+    PreviewShow(1)
     ShowNearCursor(g, mx, my)
     SetTimer(PreviewPoll, 200)
 }
@@ -467,7 +524,7 @@ PreviewActive(*) {
     return PREVIEW && WinActive("ahk_id " PREVIEW.gui.Hwnd)
 }
 
-; Show tab i: its text (or error / "Working...") and mark it as the selected one
+; You picked tab i (click or 1-9); the window stops switching tabs by itself
 PreviewSelect(i, *) {
     if !PREVIEW || i > PREVIEW.jobs.Length
         return
@@ -475,6 +532,12 @@ PreviewSelect(i, *) {
         PreviewUseTone(i)
         return
     }
+    PREVIEW.picked := true
+    PreviewShow(i)
+}
+
+; Show tab i: its text (or error / "Working...") and mark it as the selected one
+PreviewShow(i) {
     PREVIEW.sel := i
     for j, btn in PREVIEW.tabs {
         name := PREVIEW.jobs[j].preset.index " " PREVIEW.jobs[j].preset.name
@@ -486,7 +549,7 @@ PreviewSelect(i, *) {
     else if job.done
         text := job.text
     else
-        text := "Working..."
+        text := JobStatus(job)
     PREVIEW.edit.Value := StrReplace(StrReplace(text, "`r`n", "`n"), "`n", "`r`n")  ; Edit controls need CRLF
     PREVIEW.use.Enabled := job.done && job.error = ""
 }
@@ -498,15 +561,31 @@ PreviewPoll() {
     }
     pending := false
     changed := false
-    for job in PREVIEW.jobs {
+    first := 0  ; the first tab that just finished
+    for i, job in PREVIEW.jobs {
         was := job.done
         if !PollJob(job)
             pending := true
-        else if !was
+        else if !was {
             changed := true
+            first := first ? first : i
+        }
     }
-    if changed
-        (PREVIEW.kind = "list") ? PreviewRefreshRows() : PreviewSelect(PREVIEW.sel)
+    if (changed && PROVIDER = "ollama")
+        StartNextJob(PREVIEW.jobs)
+    if changed {
+        if (PREVIEW.kind = "list")
+            PreviewRefreshRows()
+        else {
+            ; Until you pick a tab yourself, show the first result that is ready
+            sel := PREVIEW.sel
+            if (!PREVIEW.picked && first && !PREVIEW.jobs[sel].done)
+                sel := first
+            PreviewShow(sel)
+        }
+        ready := JobsReady(PREVIEW.jobs)
+        PREVIEW.gui.Title := pending ? PREVIEW.title " (" ready " of " PREVIEW.jobs.Length " ready)" : PREVIEW.title
+    }
     if !pending
         SetTimer(PreviewPoll, 0)
 }
@@ -550,7 +629,6 @@ RunChat(hk, *) {
 ; Ask the LLM to explain the selected word or text and show the answer in a tooltip
 ; (nothing is replaced); the tooltip goes away on a click, Esc or after EXPLAIN_SECONDS
 RunExplain(hk, *) {
-    global BUSY, EXPLAIN_START
     if (BUSY || MENU_OPEN || PREVIEW || IsExcludedApp()) {
         PassThrough(hk)
         return
@@ -563,7 +641,12 @@ RunExplain(hk, *) {
     A_Clipboard := savedClip
     if hk.isMouse
         KeyWait(hk.key, "T2")
+    Explain(original)
+}
 
+; Show an explanation of the text in a tooltip at the cursor
+Explain(original) {
+    global BUSY, EXPLAIN_START
     SetTimer(ExplainWatch, 0)
     BUSY := true
     ToolTip("Explaining...")

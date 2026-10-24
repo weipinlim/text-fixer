@@ -2,6 +2,9 @@
 ; as vLLM, llama.cpp or ChatGPT), gemini (Google) and ollama.
 ; Uses the globals PROVIDER, API_URL, API_KEY, MODEL, TEMPERATURE and TIMEOUT_SEC.
 
+global OLLAMA_THINK_OFF := true  ; cleared if this Ollama rejects the "think" option
+global SENT := Map()             ; request -> [messages, system], to resend it once
+
 ; Chat endpoint of the chosen provider; API_URL overrides the built-in defaults
 EndpointUrl() {
     if (API_URL != "")
@@ -26,8 +29,11 @@ BuildBody(messages, system) {
     list := (system != "") ? '{"role":"system","content":' JsonEscape(system) '}' : ""
     for msg in messages
         list .= (list != "" ? "," : "") '{"role":"' msg.role '","content":' JsonEscape(msg.content) '}'
+    ; think:false stops Qwen3 and other reasoning models from thinking first (much faster);
+    ; keep_alive keeps the model loaded between requests
     if (PROVIDER = "ollama")
-        return '{"model":' JsonEscape(MODEL) ',"messages":[' list '],"stream":false,"options":{"temperature":' TEMPERATURE '}}'
+        return '{"model":' JsonEscape(MODEL) ',"messages":[' list '],"stream":false'
+            . (OLLAMA_THINK_OFF ? ',"think":false' : '') ',"keep_alive":"30m","options":{"temperature":' TEMPERATURE '}}'
     return '{"model":' JsonEscape(MODEL) ',"messages":[' list '],"temperature":' TEMPERATURE ',"stream":false}'
 }
 
@@ -56,6 +62,7 @@ StartChat(messages, system, async) {
             http.SetRequestHeader("Authorization", "Bearer " API_KEY)
     }
     http.Send(BuildBody(messages, system))
+    SENT[ComObjValue(http)] := [messages, system]
     return http
 }
 
@@ -76,7 +83,15 @@ HttpReady(http) {
 }
 
 FinishRequest(http) {
+    global OLLAMA_THINK_OFF
+    key := ComObjValue(http)
+    request := SENT.Has(key) ? SENT.Delete(key) : ""
     response := ReadUtf8Body(http)
+    ; An older Ollama doesn't know "think": send the request again without it
+    if (http.Status = 400 && PROVIDER = "ollama" && OLLAMA_THINK_OFF && InStr(response, "think") && request) {
+        OLLAMA_THINK_OFF := false
+        return FinishRequest(StartChat(request[1], request[2], false))
+    }
     if (http.Status != 200)
         throw Error("HTTP " http.Status "`n" SubStr(response, 1, 500))
 
@@ -156,4 +171,52 @@ ExtractContent(json) {
         i += 2
     }
     throw Error("Malformed response:`n" SubStr(json, 1, 500))
+}
+
+; ---------------------------------------------------------------------------
+; Ollama: list and download models
+; ---------------------------------------------------------------------------
+
+; http://localhost:11434, or the server part of the API URL
+OllamaBase(apiUrl) {
+    if (apiUrl != "" && RegExMatch(apiUrl, "i)^(https?://[^/]+)", &m))
+        return m[1]
+    return "http://localhost:11434"
+}
+
+; Names of the downloaded models; throws if Ollama isn't running
+OllamaModels(base) {
+    http := ComObject("WinHttp.WinHttpRequest.5.1")
+    http.SetTimeouts(2000, 2000, 3000, 5000)
+    http.Open("GET", base "/api/tags", false)
+    http.Send()
+    if (http.Status != 200)
+        throw Error("HTTP " http.Status)
+    body := ReadUtf8Body(http)
+    models := []
+    pos := 1
+    while (pos := RegExMatch(body, '"name"\s*:\s*"([^"]+)"', &m, pos)) {
+        models.Push(m[1])
+        pos += m.Len
+    }
+    return models
+}
+
+; "qwen3:4b" also matches "qwen3:4b:latest"-style names, and "x" matches "x:latest"
+HasModel(models, name) {
+    for model in models
+        if (model = name || model = name ":latest")
+            return true
+    return false
+}
+
+; ollama.exe from the default per-user install, else whatever is on PATH
+OllamaExe() {
+    exe := EnvGet("LOCALAPPDATA") "\Programs\Ollama\ollama.exe"
+    return FileExist(exe) ? exe : "ollama"
+}
+
+; Download a model in a console window that shows the progress
+PullModel(name) {
+    Run(A_ComSpec ' /c ""' OllamaExe() '" pull ' name ' && echo. && echo Done. Close this window and reload TextFixer. & pause"')
 }

@@ -4,14 +4,26 @@ The AutoHotkey version of TextFixer: one small script, very light, with mouse sh
 (Ctrl+click and so on). See the [main README](../README.md) for how it compares with the Python version.
 
 Fix or rewrite selected text in any Windows app with one hotkey. TextFixer sends the selection to
-your LLM and pastes the result back in place. It works with any OpenAI-compatible server (vLLM,
-llama.cpp, LM Studio, ChatGPT...), Google Gemini and Ollama.
+your LLM and pastes the result back in place. By default it uses [Ollama](https://ollama.com) with
+the Qwen3 4B model on your own PC, so nothing leaves your computer. It also works with any
+OpenAI-compatible server (vLLM, llama.cpp, LM Studio, ChatGPT...) and Google Gemini.
 
 Besides rewriting, it can summarize, list key points or make a table in a result window with
 follow-up chat, run every tone at once so you can pick the best, take a free-form instruction
 ("translate to French"), and explain a word in a tooltip.
 
 ## Setup
+
+### Easiest: the installer
+
+Download **TextFixer-AHK-Setup.exe** from the
+[Releases page](https://github.com/weipinlim/text-fixer/releases) (or the `TextFixer-AHK-Setup`
+artifact of the latest *Build AutoHotkey installer* run under **Actions**) and run it. It installs
+TextFixer, installs Ollama if you don't have it, downloads the Qwen3 4B model (about 2.5 GB, a
+window shows the progress) and starts TextFixer. No AutoHotkey install is needed: the installer
+contains `TextFixer.exe`, built on GitHub with the official AutoHotkey compiler.
+
+### Manual setup
 
 1. Install [AutoHotkey v2](https://www.autohotkey.com/) (not needed if you use a compiled `TextFixer.exe`).
 2. Download or clone this repo:
@@ -21,11 +33,15 @@ follow-up chat, run every tone at once so you can pick the best, take a free-for
    The AutoHotkey version is in the `ahk` folder.
 3. Double-click `ahk\TextFixer.ahk` (keep the `lib` folder next to it). The first time, it creates
    `config.ini` from `config.example.ini` and opens the **Settings** window. Fill in:
-   - **Provider**: `openai` (vLLM, llama.cpp, LM Studio, ChatGPT...), `gemini` or `ollama`
+   - **Provider**: `ollama` (the default), `openai` (vLLM, llama.cpp, LM Studio, ChatGPT...) or `gemini`
    - **API URL**: for `openai`, your server's chat endpoint, e.g.
      `http://192.168.1.10:8000/v1/chat/completions`. Leave it empty for `gemini` and `ollama`.
    - **API key**: your key (leave empty if the server has none)
-   - **Model**: the model name, e.g. as listed at `http://YOUR_SERVER:8000/v1/models`
+   - **Model**: the model name. For Ollama the box lists the models you have downloaded, and
+     **Download** gets a new one (the default is `qwen3:4b-instruct-2507-q4_K_M`). For a server,
+     see e.g. `http://YOUR_SERVER:8000/v1/models`.
+   - **Tone shortcuts** (right-hand column): the shortcut for each tone. Settings won't save if
+     two shortcuts are the same.
 
    Press **Save**; the script reloads and a green **H** icon appears in the system tray.
    You can reopen Settings any time from the tray icon, or edit `config.ini` directly.
@@ -42,16 +58,16 @@ follow-up chat, run every tone at once so you can pick the best, take a free-for
    **Ctrl+Shift+Space** for a popup with a "describe your change" box and a button per tone,
    or press a tone hotkey:
 
-   | Hotkey | Tone         | What it does                                              |
-   |--------|--------------|-----------------------------------------------------------|
-   | Ctrl+1 | Casual       | Relaxed, conversational (**default** for Ctrl+Left click) |
-   | Ctrl+2 | Professional | Polite business tone for work email                       |
-   | Ctrl+3 | Sarcastic    | Dry, witty, playful sarcasm                               |
-   | Ctrl+4 | Diplomatic   | Softens blunt or negative wording, stays clear            |
-   | Ctrl+5 | Confident    | Direct and assertive, removes "just", "sorry to bother"…  |
-   | Ctrl+6 | Summary      | Shows a summary in a result window (follow-up chat)        |
-   | Ctrl+7 | Key Points   | Shows the key points in a result window                    |
-   | Ctrl+8 | Table        | Shows the text as a table in a result window               |
+   | Hotkey         | Tone         | What it does                                              |
+   |----------------|--------------|-----------------------------------------------------------|
+   | Ctrl+Shift+F1 | Casual       | Relaxed, conversational (**default** for Ctrl+Left click) |
+   | Ctrl+Shift+F2 | Professional | Polite business tone for work email                       |
+   | Ctrl+Shift+F3 | Sarcastic    | Dry, witty, playful sarcasm                               |
+   | Ctrl+Shift+F4 | Diplomatic   | Softens blunt or negative wording, stays clear            |
+   | Ctrl+Shift+F5 | Confident    | Direct and assertive, removes "just", "sorry to bother"…  |
+   | Ctrl+Shift+F6 | Summary      | Shows a summary in a result window (follow-up chat)        |
+   | Ctrl+Shift+F7 | Key Points   | Shows the key points in a result window                    |
+   | Ctrl+Shift+F8 | Table        | Shows the text as a table in a result window               |
 
    Tones 1-5 also fix spelling and grammar. Tones 6-8 open the result window instead of
    replacing your text.
@@ -61,7 +77,7 @@ follow-up chat, run every tone at once so you can pick the best, take a free-for
    tooltip says so.
 
 **No text selected?** The key or click is passed straight through to the app, so normal shortcuts
-keep working: Ctrl+1–5 in Outlook, Teams and browser tabs, and Ctrl+click to open links,
+keep working, such as Ctrl+click to open links,
 multi-select or Ctrl+drag. Because TextFixer first checks for a selection, these take about 0.3 s
 longer than usual.
 
@@ -73,7 +89,8 @@ hotkeys off and on) and **Start with Windows**.
 
 - **Popup** (`POPUP_HOTKEY`, default `^+Space`, Ctrl+Shift+Space): opens next to the cursor. Type
   what you want changed ("translate to French", "add code comments", "make it shorter") and press
-  Enter, or click one of the tone buttons. Click elsewhere or press Esc to close it.
+  Enter, or click one of the tone buttons. **Compare (tabs)** and **Compare (list)** run every tone
+  so you can pick one, and **Explain** explains the selection. Click elsewhere or press Esc to close it.
 - **Result window**: tones with `MODE=window` (Summary, Key Points, Table by default) show the answer
   here, formatted as Markdown (headings, lists, tables, code). Type a follow-up question in the box
   at the bottom and press Enter; the whole conversation is sent each time. **Copy last answer**
@@ -123,12 +140,12 @@ Each tone has its own section in `config.ini`:
 ```ini
 [Preset3]
 NAME=Sarcastic
-HOTKEY=^3
+HOTKEY=^+F3
 PROMPT=Rewrite the user's text with a dry, witty, sarcastic tone. ...
 ```
 
 - `HOTKEY` uses AutoHotkey syntax: `^` = Ctrl, `!` = Alt, `+` = Shift, `#` = Win,
-  `LButton` = left click. For example, `^3` = Ctrl+3 and `^!3` = Ctrl+Alt+3 (the old style).
+  `LButton` = left click. For example, `^+F3` = Ctrl+Shift+F3 and `^!3` = Ctrl+Alt+3.
 - Leave `HOTKEY` empty (`HOTKEY=`) if a tone should only be used as the default.
 - You can have up to 9 tones (`[Preset1]`…`[Preset9]`). Delete a section to remove a tone.
 - Use `\n` for a line break inside a `PROMPT`.
@@ -142,6 +159,11 @@ Other settings in `[Settings]`:
   selected, so Ctrl+1 (Format Cells) and Ctrl+click would otherwise be taken over.
 - `SELECTION_WAIT_MS`: how long to wait for the selection to be copied (default 300). Raise it if a
   slow app sometimes gets the normal shortcut when text *is* selected.
+- With Ollama, comparing every tone runs them one after another (Ollama answers one request at
+  a time anyway); each result appears as soon as it is ready, and the title shows how many are
+  done. Thinking is turned off (`think: false`) so Qwen3 answers quickly, and the model stays
+  loaded for 30 minutes between requests. At start-up TextFixer checks that Ollama is running and
+  offers to download the model if it is missing.
 - `PROVIDER`, `API_URL`, `API_KEY`, `MODEL`, `TEMPERATURE`, `TIMEOUT`: connection settings (the
   Settings window edits these). For `gemini` and `ollama` an empty `API_URL` uses the standard
   address (`https://generativelanguage.googleapis.com/...` and `http://localhost:11434/api/chat`).
@@ -149,7 +171,8 @@ Other settings in `[Settings]`:
 
 ## Make a standalone .exe (optional)
 
-So you can run it on PCs without AutoHotkey:
+The installer above already contains a compiled `TextFixer.exe`, built by the
+*Build AutoHotkey installer* GitHub Actions workflow. To compile it yourself:
 
 1. Right-click `TextFixer.ahk` → **Compile Script** (or open *Ahk2Exe* from the AutoHotkey Dash).
    The files in `lib` are included automatically.
