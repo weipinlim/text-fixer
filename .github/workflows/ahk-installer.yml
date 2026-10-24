@@ -1,5 +1,6 @@
 # Builds TextFixer-AHK-Setup.exe (AutoHotkey version + Ollama + model download) on Windows.
-# TextFixer.exe is compiled with the official AutoHotkey compiler (Ahk2Exe).
+# TextFixer.exe is compiled with the official AutoHotkey compiler (Ahk2Exe). Also uploads
+# TextFixer-AHK-Script: the plain script for people who already have AutoHotkey.
 # Runs on pushes that change the AutoHotkey version, on demand (Actions tab > Build AutoHotkey
 # installer > Run workflow), and for tags like ahk-v1.0.0 (then the installer is attached to a
 # GitHub release).
@@ -52,6 +53,14 @@ jobs:
           Get-Content "$env:RUNNER_TEMP\validate.txt"
           if ($p.ExitCode -ne 0) { exit 1 }
 
+      # The no-install version: the script, lib and settings file for people who have AutoHotkey.
+      # Copied before compiling, so it keeps the script exactly as it is in the repo.
+      - name: Collect the script version
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\script\TextFixer" | Out-Null
+          Copy-Item TextFixer.ahk, config.example.ini, README.md "$env:RUNNER_TEMP\script\TextFixer"
+          Copy-Item lib "$env:RUNNER_TEMP\script\TextFixer\lib" -Recurse
+
       - name: Compile TextFixer.exe
         run: |
           $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" -replace "^ahk-v", "" } else { "0.1.0" }
@@ -77,6 +86,11 @@ jobs:
           path: |
             ahk/build/installer/TextFixer-AHK-Setup.exe
             ahk/build/TextFixer.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TextFixer-AHK-Script
+          path: ${{ runner.temp }}/script
 
       - name: Attach to the release
         if: github.ref_type == 'tag'

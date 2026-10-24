@@ -14,25 +14,35 @@ follow-up chat, run every tone at once so you can pick the best, take a free-for
 
 ## Setup
 
-### Easiest: the installer
+There are two ways. Both use the same `config.ini`.
+
+### Option 1: the installer (no AutoHotkey needed)
 
 Download **TextFixer-AHK-Setup.exe** from the
 [Releases page](https://github.com/weipinlim/text-fixer/releases) (or the `TextFixer-AHK-Setup`
 artifact of the latest *Build AutoHotkey installer* run under **Actions**) and run it. It installs
-TextFixer, installs Ollama if you don't have it, downloads the Qwen3 4B model (about 2.5 GB, a
-window shows the progress) and starts TextFixer. No AutoHotkey install is needed: the installer
-contains `TextFixer.exe`, built on GitHub with the official AutoHotkey compiler.
+`TextFixer.exe` (built on GitHub with the official AutoHotkey compiler), installs Ollama if you
+don't have it, downloads the Qwen3 4B model (about 2.5 GB, a window shows the progress) and starts
+TextFixer.
 
-### Manual setup
+### Option 2: you already have AutoHotkey (nothing to install)
 
-1. Install [AutoHotkey v2](https://www.autohotkey.com/) (not needed if you use a compiled `TextFixer.exe`).
-2. Download or clone this repo:
+You need [AutoHotkey v2](https://www.autohotkey.com/). Nothing is built or installed: you copy the
+folder and edit the settings file.
+
+1. Copy the `ahk` folder from this repo to your PC (anywhere, e.g. `Documents\TextFixer`). Keep
+   `TextFixer.ahk`, the `lib` folder and `config.example.ini` together. The
+   `TextFixer-AHK-Script` artifact of the *Build AutoHotkey installer* run (under **Actions**) is
+   exactly this folder as a zip. Or clone the repo:
    ```
    git clone https://github.com/weipinlim/text-fixer.git
    ```
-   The AutoHotkey version is in the `ahk` folder.
-3. Double-click `ahk\TextFixer.ahk` (keep the `lib` folder next to it). The first time, it creates
-   `config.ini` from `config.example.ini` and opens the **Settings** window. Fill in:
+2. Copy `config.example.ini` to `config.ini` and edit it in Notepad: provider, model, API key and
+   shortcuts. (If you skip this, the first run creates `config.ini` for you and opens Settings.)
+   For the default Ollama setup, install [Ollama](https://ollama.com/download); TextFixer offers
+   to download the Qwen3 4B model the first time it starts.
+3. Double-click `TextFixer.ahk`. The **Settings** window (tray icon → Settings) edits the same
+   values as `config.ini`:
    - **Provider**: `ollama` (the default), `openai` (vLLM, llama.cpp, LM Studio, ChatGPT...) or `gemini`
    - **API URL**: for `openai`, your server's chat endpoint, e.g.
      `http://192.168.1.10:8000/v1/chat/completions`. Leave it empty for `gemini` and `ollama`.
@@ -169,22 +179,21 @@ Other settings in `[Settings]`:
   address (`https://generativelanguage.googleapis.com/...` and `http://localhost:11434/api/chat`).
 - Per tone, `MODE=window` shows the answer in the result window instead of replacing the text.
 
-## Make a standalone .exe (optional)
+To start it automatically with Windows, use the tray menu → **Start with Windows**.
 
-The installer above already contains a compiled `TextFixer.exe`, built by the
-*Build AutoHotkey installer* GitHub Actions workflow. To compile it yourself:
+## Make the .exe yourself (optional)
+
+The installer already contains `TextFixer.exe`; the *Build AutoHotkey installer* workflow also
+uploads it on its own. To compile it yourself:
 
 1. Right-click `TextFixer.ahk` → **Compile Script** (or open *Ahk2Exe* from the AutoHotkey Dash).
    The files in `lib` are included automatically.
-2. Put `config.example.ini` in the same folder as `TextFixer.exe` (the first run creates `config.ini`
-   from it), or put your own `config.ini` there.
+2. Put `config.example.ini` (or your own `config.ini`) in the same folder as `TextFixer.exe`.
 3. Double-click `TextFixer.exe`.
-
-To start it automatically with Windows, use the tray menu → **Start with Windows**.
 
 ## Troubleshooting
 
-- **"config.ini not found"**: `config.example.ini` is missing next to the script/exe. Put it back,
+- **"config.ini not found"**: `config.example.ini` is missing next to the script or exe. Put it back,
   or create `config.ini` yourself.
 - **"Request failed: HTTP 401"**: wrong `API_KEY`.
 - **"Request failed: HTTP 404"**: check `API_URL` ends with `/v1/chat/completions` and `MODEL` matches the server.

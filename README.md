@@ -10,7 +10,7 @@ There are two versions. They do the same job and share the same `config.ini` for
 | | [AutoHotkey version](ahk/README.md) (`ahk/`) | [Python version](python/README.md) (`python/`) |
 |---|---|---|
 | **Best for** | The lightest setup, mouse shortcuts | The easiest setup for most people |
-| **Install** | One-click installer (TextFixer, Ollama and the model), or the script itself | One-click installer (TextFixer, Ollama and the model) |
+| **Install** | One-click installer (TextFixer.exe, Ollama and the model), **or** copy the `ahk` folder and edit `config.ini` if you have AutoHotkey | One-click installer (TextFixer, Ollama and the model) |
 | **Shortcuts** | Keyboard **and mouse** (Ctrl+click, Ctrl+Shift+click...) | Keyboard only (nothing runs on your other keystrokes or mouse moves) |
 | **Look** | Standard Windows windows | Rounded, modern windows, light and dark |
 | **Size** | About 1.3 MB (plus Ollama and the model) | About 60 MB (plus Ollama and the model) |
@@ -23,8 +23,9 @@ follow-up chat, and explain a word in a tooltip.
 
 - **Not sure?** Use the **Python version's one-click installer** from the
   [Releases](../../releases) page: it installs TextFixer, Ollama and the AI model for you.
-- **Want Ctrl+click and the smallest footprint?** Use the **AutoHotkey version**: its installer,
-  `TextFixer-AHK-Setup.exe`, also installs Ollama and the AI model.
+- **Want Ctrl+click and the smallest footprint?** Use the **AutoHotkey version**. Its installer,
+  `TextFixer-AHK-Setup.exe`, also installs Ollama and the AI model. If you already have
+  AutoHotkey, you can skip the installer: copy the `ahk` folder and edit `config.ini`.
 
 Both installers are built by GitHub Actions: open the **Actions** tab, pick *Windows installer*
 (Python) or *Build AutoHotkey installer*, open the latest green run and download the artifact.
