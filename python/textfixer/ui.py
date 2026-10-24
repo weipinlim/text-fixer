@@ -502,39 +502,54 @@ class SettingsWindow(tk.Toplevel):
         self.resizable(False, False)
         body = tk.Frame(self, padx=10, pady=10)
         body.pack()
-        tk.Label(body, text="Provider", anchor="w", width=24).grid(row=0, column=0, sticky="w", pady=2)
+        tk.Label(body, text="Provider", anchor="w", width=20).grid(row=0, column=0, sticky="w", pady=2)
         self.provider = tk.StringVar(value=cfg.provider)
         tk.OptionMenu(body, self.provider, "ollama", "openai", "gemini").grid(row=0, column=1, sticky="we")
 
-        tk.Label(body, text="Model", anchor="w", width=24).grid(row=1, column=0, sticky="w", pady=2)
+        tk.Label(body, text="Model", anchor="w", width=20).grid(row=1, column=0, sticky="w", pady=2)
         self.model = tk.StringVar(value=cfg.setting("MODEL"))
-        self.model_box = ttk.Combobox(body, textvariable=self.model, width=43)
+        self.model_box = ttk.Combobox(body, textvariable=self.model, width=30)
         self.model_box.grid(row=1, column=1, sticky="we")
         buttons = tk.Frame(body)
         buttons.grid(row=1, column=2, padx=(4, 0))
         tk.Button(buttons, text="Refresh", command=self.refresh_models).pack(side="left")
-        tk.Button(buttons, text="Download model", command=self.download).pack(side="left", padx=(4, 0))
+        tk.Button(buttons, text="Download", command=self.download).pack(side="left", padx=(4, 0))
         self.status = tk.Label(body, text="", anchor="w", fg="#666")
         self.status.grid(row=2, column=1, columnspan=2, sticky="w")
 
         self.vars: dict[str, tk.StringVar] = {}
         for i, (key, label) in enumerate(SETTINGS_FIELDS, start=3):
-            tk.Label(body, text=label, anchor="w", width=24).grid(row=i, column=0, sticky="w", pady=2)
+            tk.Label(body, text=label, anchor="w", width=20).grid(row=i, column=0, sticky="w", pady=2)
             var = tk.StringVar(value=cfg.setting(key))
             self.vars[key] = var
-            tk.Entry(body, textvariable=var, width=46, show="*" if key == "API_KEY" else "").grid(
+            tk.Entry(body, textvariable=var, width=33, show="*" if key == "API_KEY" else "").grid(
                 row=i, column=1, sticky="we")
+        # Tone shortcuts, in a second column: [PresetN] HOTKEY
+        tones = tk.LabelFrame(body, text="Tone shortcuts", padx=8, pady=4)
+        tones.grid(row=0, column=3, rowspan=len(SETTINGS_FIELDS) + 3, sticky="nw", padx=(16, 0))
+        self.tone_vars: dict[int, tk.StringVar] = {}
+        for i, preset in enumerate(cfg.presets):
+            tk.Label(tones, text=f"{preset.index} {preset.name}", anchor="w", width=13).grid(row=i, column=0, sticky="w", pady=2)
+            var = tk.StringVar(value=preset.hotkey)
+            self.tone_vars[preset.index] = var
+            tk.Entry(tones, textvariable=var, width=11).grid(row=i, column=1, sticky="w")
+        tk.Label(tones, text="Suggested: ^+F1 .. ^+F8\n(Ctrl+Shift+F1..F8).\nEmpty = only in the popup.",
+                 justify="left", fg="#666").grid(row=len(cfg.presets), column=0, columnspan=2, sticky="w", pady=(6, 0))
+        tk.Button(tones, text="Use Ctrl+Shift+F1..F8", command=self.use_function_keys).grid(
+            row=len(cfg.presets) + 1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
         last = len(SETTINGS_FIELDS) + 3
         hint = ("Provider: ollama = Ollama on this PC (leave API URL empty; for another PC use "
                 "http://address:11434); openai = any OpenAI-compatible server (set API URL); gemini = Google "
                 "(set API key).\nHotkeys (keyboard only): ^ Ctrl, ! Alt, + Shift, # Win, then a key, e.g. ^+E. "
                 "Empty turns one off; the popup (Ctrl+Shift+Space) can do everything. Saving restarts TextFixer.")
-        tk.Label(body, text=hint, wraplength=620, justify="left", fg="#666").grid(
-            row=last, column=0, columnspan=3, sticky="w", pady=8)
+        tk.Label(body, text=hint, wraplength=760, justify="left", fg="#666").grid(
+            row=last, column=0, columnspan=4, sticky="w", pady=8)
         bar = tk.Frame(body)
-        bar.grid(row=last + 1, column=0, columnspan=3, sticky="w")
+        bar.grid(row=last + 1, column=0, columnspan=4, sticky="w")
         tk.Button(bar, text="Save and restart", width=16, command=self.save).pack(side="left")
         tk.Button(bar, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
+        tk.Button(bar, text="Open config.ini", command=self.open_file).pack(side="left", padx=(18, 0))
         self.bind("<Escape>", lambda e: self.destroy())
         self.refresh_models()
 
@@ -568,7 +583,7 @@ class SettingsWindow(tk.Toplevel):
             return
         self.model_box.configure(values=names)
         self.status.configure(text=error or (f"{len(names)} model(s) installed in Ollama" if names else
-                                             "No models installed yet: type a name and click Download model"))
+                                             "No models installed yet: type a name and click Download"))
 
     def download(self) -> None:
         name = self.model.get().strip()
@@ -576,11 +591,57 @@ class SettingsWindow(tk.Toplevel):
             return
         PullWindow(self.ui, self._current_llm(), name, on_done=self.refresh_models)
 
+    def use_function_keys(self) -> None:
+        for n, (index, var) in enumerate(sorted(self.tone_vars.items()), start=1):
+            var.set(f"^+F{n}")
+
+    def open_file(self) -> None:
+        import os
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            os.startfile(str(self.cfg.path))  # noqa: S606 - opens it in the user's editor
+        else:
+            subprocess.Popen(["xdg-open", str(self.cfg.path)])
+
+    def check_hotkeys(self, settings: dict[str, str]) -> list[str]:
+        """Problems with the typed shortcuts: unknown keys, mouse buttons, the same keys twice."""
+        from .hotkeys import parse_hotkey
+
+        entries = [(label, settings[key]) for key, label in SETTINGS_FIELDS if key.endswith("_HOTKEY")]
+        names = {p.index: f"{p.index} {p.name}" for p in self.cfg.presets}
+        entries += [(names[i], var.get().strip()) for i, var in sorted(self.tone_vars.items())]
+        problems, seen = [], {}
+        for label, spec in entries:
+            if not spec:
+                continue
+            try:
+                combo = parse_hotkey(spec)
+            except ValueError:
+                problems.append(f"{label}: '{spec}' is not a key combination TextFixer knows")
+                continue
+            if combo.is_mouse:
+                problems.append(f"{label}: '{spec}' is a mouse button; use a key")
+                continue
+            key = (combo.mods, combo.key)
+            if key in seen:
+                problems.append(f"{label} and {seen[key]} both use {combo.describe()}")
+            else:
+                seen[key] = label
+        return problems
+
     def save(self) -> None:
         settings = {"PROVIDER": self.provider.get(), "MODEL": self.model.get().strip()}
         for key, var in self.vars.items():
             settings[key] = var.get().strip()
+        problems = self.check_hotkeys(settings)
+        if problems:
+            messagebox.showerror("TextFixer", "Please fix these shortcuts first:\n\n" + "\n".join(problems), parent=self)
+            return
         self.cfg.update("Settings", settings)
+        for index, var in self.tone_vars.items():
+            self.cfg.update(f"Preset{index}", {"HOTKEY": var.get().strip()})
         self.destroy()
         self.on_saved()
 

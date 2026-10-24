@@ -72,7 +72,7 @@ def run_setup(cfg: Config, models: list[str], wait: float, out=print) -> int:
     out(f"Waiting for Ollama at {llm.ollama_base()} ...")
     if not wait_for_ollama(llm, wait, out):
         out("Ollama is not running and could not be started.")
-        out("Install it from https://ollama.com/download, start it, then open TextFixer > Settings > Download model.")
+        out("Install it from https://ollama.com/download, start it, then open TextFixer > Settings > Download.")
         return 1
 
     current = cfg.setting("MODEL")
@@ -95,5 +95,5 @@ def run_setup(cfg: Config, models: list[str], wait: float, out=print) -> int:
         return 0
 
     out("None of the models could be downloaded: " + ", ".join(models))
-    out("Check your internet connection, then use TextFixer > Settings > Download model.")
+    out("Check your internet connection, then use TextFixer > Settings > Download.")
     return 1

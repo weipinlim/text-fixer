@@ -101,7 +101,7 @@ class App:
         try:
             if not self.llm.has_model(model):
                 self.ui.call(self.ui.show_tip, f"Ollama does not have the model '{model}' yet.\n"
-                             "Open Settings (tray icon) and click Download model.", 8)
+                             "Open Settings (tray icon) and click Download.", 8)
         except Exception as exc:
             self.ui.call(self.ui.show_tip, f"Cannot reach Ollama.\nStart Ollama, then try a hotkey again.\n({exc})", 8)
 

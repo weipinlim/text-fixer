@@ -5,8 +5,8 @@ by an LLM running in **[Ollama](https://ollama.com)** on your PC (or any OpenAI-
 Gemini). It does the same things as the [AutoHotkey version](../README.md) and uses the same
 `config.ini` format, so tones and hotkeys move between them:
 
-- `Ctrl+1`..`Ctrl+5`: rewrite the selection in a tone and replace it
-- `Ctrl+6/7/8`: Summary, Key Points, Table in a result window (Markdown, follow-up chat)
+- `Ctrl+Shift+F1`..`F5`: rewrite the selection in a tone and replace it
+- `Ctrl+Shift+F6/F7/F8`: Summary, Key Points, Table in a result window (Markdown, follow-up chat)
 - `Ctrl+Shift+Space`: popup at the cursor: describe any change, pick a tone, **Compare all**
   (every tone's answer, in tabs or as a list) or **Explain** (the selected word, in a tooltip)
 - `Ctrl+Alt+Space`: chat window
@@ -30,7 +30,7 @@ installs everything, with no admin rights needed:
 2. **Ollama**, if it is not installed yet (the official installer from Ollama's GitHub releases)
 3. The AI model, **Qwen3 4B instruct** (about 2.5 GB; a window shows the download progress)
 
-When it finishes, TextFixer is running: select text anywhere and press `Ctrl+1`. The installer is
+When it finishes, TextFixer is running: select text anywhere and press `Ctrl+Shift+Space`. The installer is
 not code-signed, so Windows SmartScreen may say "Windows protected your PC": click **More info** >
 **Run anyway** if you trust where you downloaded it from.
 
@@ -64,7 +64,7 @@ same by hand (start Ollama, download the model, write `config.ini`).
    python -m textfixer
    ```
 4. The first run creates `config.ini` and opens **Settings**. Type a model name (for example
-   `llama3.2`) and click **Download model**; a window shows the progress. Then **Save and restart**.
+   `llama3.2`) and click **Download**; a window shows the progress. Then **Save and restart**.
 
 Check any time that everything is connected:
 ```
@@ -108,7 +108,9 @@ code-signed, so Windows SmartScreen or antivirus may warn on first run.
 
 - Keyboard shortcuts only (no Ctrl+click and so on): they use Windows' RegisterHotKey, so nothing
   runs on your other keystrokes or mouse moves. When nothing is selected the keys still reach the app
-  (e.g. Ctrl+1 in Outlook), like in the AutoHotkey version.
+  (e.g. a tone shortcut that some program also uses), like in the AutoHotkey version.
+- Change any shortcut in **Settings** (tray icon), including one per tone under **Tone shortcuts**.
+  Settings refuses typos, mouse buttons and the same keys used twice.
 - Only **text** on the clipboard is saved and restored (images or files on the clipboard are lost
   when a hotkey runs). The AutoHotkey version restores everything.
 - The Settings window restarts the app when you save, and can download Ollama models.
@@ -121,7 +123,7 @@ code-signed, so Windows SmartScreen or antivirus may warn on first run.
 - **"... is already used by another program"**: another app owns that shortcut. Pick another one in
   Settings.
 - **"Cannot reach Ollama"**: start Ollama (Start menu), or check `API_URL`.
-- **"Ollama does not have the model ..."**: Settings > Download model, or `ollama pull <model>`.
+- **"Ollama does not have the model ..."**: Settings > Download, or `ollama pull <model>`.
 - **"Every tone at once" takes a while**: a model on your PC writes one answer at a time, so 5 tones
   take about 5 times as long as one. The window shows "2 of 5 ready" and you can pick any finished
   version straight away; closing it stops the rest. Check `THINK=off` too.

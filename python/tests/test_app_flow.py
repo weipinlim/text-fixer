@@ -240,7 +240,7 @@ def test_hotkey_registration_and_errors(cfg, ui):
     app.register_hotkeys()
     assert any("POPUP_HOTKEY" in e for e in app.hotkey_errors)
     summary = app.hotkey_summary()
-    assert "Ctrl+1 = Casual" in summary and "Ctrl+Alt+Space = open the chat window" in summary
+    assert "Ctrl+Shift+F1 = Casual" in summary and "Ctrl+Alt+Space = open the chat window" in summary
 
 
 def test_old_mouse_shortcuts_are_switched_off_once(cfg, ui, monkeypatch):
@@ -284,3 +284,32 @@ def test_passthrough_goes_to_the_hotkey_manager(app):
     app.hk.passthrough = lambda combo, send: sent.append(combo)
     app.passthrough(parse_hotkey("^1"))
     assert sent == [parse_hotkey("^1")]
+
+
+def test_settings_tone_shortcuts_save_and_checks(app, ui, monkeypatch):
+    from textfixer.config import Config
+    from textfixer.ui import SettingsWindow
+
+    errors = []
+    monkeypatch.setattr("textfixer.ui.messagebox.showerror", lambda title, msg, parent=None: errors.append(msg))
+    saved = []
+    win = SettingsWindow(ui, app, lambda: saved.append(True))
+    assert win.tone_vars[1].get() == "^+F1" and len(win.tone_vars) == 8
+
+    win.tone_vars[1].set("^!+1")
+    win.tone_vars[2].set("^+Space")          # same as the popup
+    win.tone_vars[3].set("^LButton")         # mouse
+    win.tone_vars[4].set("^+Nonsense")       # unknown key
+    win.save()
+    assert saved == [] and len(errors) == 1
+    msg = errors[0]
+    assert "2 Professional and Popup both use Ctrl+Shift+Space" in msg or "Popup and 2 Professional" in msg
+    assert "3 Sarcastic: '^LButton' is a mouse button" in msg and "4 Diplomatic: '^+Nonsense'" in msg
+
+    win.use_function_keys()
+    win.tone_vars[1].set("^!+1")
+    win.tone_vars[5].set("")
+    win.save()
+    assert saved == [True]
+    again = Config(app.cfg.path)
+    assert [p.hotkey for p in again.presets] == ["^!+1", "^+F2", "^+F3", "^+F4", "", "^+F6", "^+F7", "^+F8"]

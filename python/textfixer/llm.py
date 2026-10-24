@@ -102,7 +102,7 @@ class LLMClient:
             if self.provider == "ollama" and exc.code == 404:
                 model = self.cfg.setting("MODEL")
                 raise LLMError(f"Ollama does not have the model '{model}'. Download it in Settings "
-                               f"(Download model), or run:  ollama pull {model}") from exc
+                               f"(Download), or run:  ollama pull {model}") from exc
             raise LLMError(f"HTTP {exc.code}\n{detail}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             hint = "\nIs Ollama running? Start it from the Start menu, then try again." if self.provider == "ollama" else ""
