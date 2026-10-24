@@ -2,7 +2,7 @@
 #   pyinstaller --noconfirm textfixer.spec
 # Result: dist/TextFixer/ with TextFixer.exe (no console window) and TextFixerCLI.exe (with console,
 # for `check` and seeing errors). Put config.example.ini next to them.
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 datas, binaries, hiddenimports = [], [], []
 
@@ -10,7 +10,8 @@ datas, binaries, hiddenimports = [], [], []
 # PyInstaller cannot see it: collect every submodule.
 for package in ("pynput", "pystray"):
     hiddenimports += collect_submodules(package)
-hiddenimports += ["PIL._tkinter_finder"]
+hiddenimports += ["PIL._tkinter_finder", "sv_ttk"]
+datas += collect_data_files("sv_ttk")  # the theme's .tcl files and images
 # Named explicitly as well, so the build does not depend on being able to import them (the X11
 # ones need a display; they only matter for test builds on Linux)
 hiddenimports += ["pynput.keyboard._win32", "pynput.mouse._win32", "pynput._util.win32", "pystray._win32",

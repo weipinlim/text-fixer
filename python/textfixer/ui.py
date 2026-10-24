@@ -54,6 +54,7 @@ class Ui:
         self.root.withdraw()
         self.root.title("TextFixer")
         self.dark = is_dark_mode()
+        apply_theme(self)
         self._queue: queue.Queue = queue.Queue()
         self._tip: tk.Toplevel | None = None
         self._tip_job = None
@@ -456,21 +457,48 @@ def _one_line(text: str, limit: int = 60) -> str:
 # Settings
 # ---------------------------------------------------------------------------
 
-SETTINGS_FIELDS = [  # (key, label)
-    ("API_URL", "API URL (empty = default)"),
+# Settings window layout: (key, label) per tab. Hotkey keys end in _HOTKEY.
+MODEL_FIELDS = [
+    ("API_URL", "Server address"),
     ("API_KEY", "API key"),
-    ("KEEP_ALIVE", "Keep model loaded"),
-    ("TEMPERATURE", "Temperature"),
-    ("TIMEOUT", "Timeout (s)"),
-    ("EXCLUDE_APPS", "Hotkeys off in"),
-    ("DEFAULT_HOTKEY", "Default tone"),
-    ("POPUP_HOTKEY", "Popup"),
-    ("MENU_HOTKEY", "Tone menu"),
-    ("PREVIEW_HOTKEY", "All tones (tabs)"),
-    ("RESULTS_MENU_HOTKEY", "All tones (list)"),
-    ("EXPLAIN_HOTKEY", "Explain word"),
-    ("CHAT_HOTKEY", "Chat window"),
+    ("KEEP_ALIVE", "Keep model loaded for"),
 ]
+SHORTCUT_FIELDS = [
+    ("POPUP_HOTKEY", "Popup (everything)"),
+    ("CHAT_HOTKEY", "Chat window"),
+    ("DEFAULT_HOTKEY", "Default tone"),
+    ("MENU_HOTKEY", "Tone menu"),
+    ("PREVIEW_HOTKEY", "Compare all (tabs)"),
+    ("RESULTS_MENU_HOTKEY", "Compare all (list)"),
+    ("EXPLAIN_HOTKEY", "Explain word"),
+]
+ADVANCED_FIELDS = [
+    ("EXCLUDE_APPS", "Shortcuts off in these apps"),
+    ("TEMPERATURE", "Temperature"),
+    ("TIMEOUT", "Timeout (seconds)"),
+    ("SELECTION_WAIT_MS", "Wait for the selection (ms)"),
+]
+SETTINGS_FIELDS = MODEL_FIELDS + SHORTCUT_FIELDS + ADVANCED_FIELDS
+PROVIDERS = {"ollama": "Ollama (on this PC)", "openai": "OpenAI-compatible server", "gemini": "Google Gemini"}
+
+
+def apply_theme(ui: "Ui") -> None:
+    """Windows 11 look (Sun Valley ttk theme), light or dark like Windows. Falls back quietly."""
+    if getattr(ui, "_themed", False):
+        return
+    ui._themed = True
+    try:
+        import sv_ttk
+
+        sv_ttk.set_theme("dark" if ui.dark else "light", ui.root)
+        # The theme sets its colours on an event our hidden main window never gets: apply them now
+        ui.root.tk.call("configure_colors")
+    except Exception as exc:  # not installed / Tk too old: the standard look still works
+        log.info("Sun Valley theme not used (%s)", exc)
+        try:
+            ttk.Style().theme_use("vista" if "vista" in ttk.Style().theme_names() else "clam")
+        except tk.TclError:
+            pass
 
 
 class _Overlay:
@@ -494,65 +522,140 @@ class _Overlay:
 
 
 class SettingsWindow(tk.Toplevel):
+    """Settings, in three tabs (Model, Shortcuts, Advanced). Saving writes config.ini and restarts."""
+
     def __init__(self, ui: Ui, app, on_saved: Callable[[], None]):
         super().__init__(ui.root)
         self.ui, self.app, self.cfg, self.on_saved = ui, app, app.cfg, on_saved
-        cfg = self.cfg
-        self.title("TextFixer - Settings")
+        self.title("TextFixer Settings")
         self.resizable(False, False)
-        body = tk.Frame(self, padx=10, pady=10)
-        body.pack()
-        tk.Label(body, text="Provider", anchor="w", width=20).grid(row=0, column=0, sticky="w", pady=2)
-        self.provider = tk.StringVar(value=cfg.provider)
-        tk.OptionMenu(body, self.provider, "ollama", "openai", "gemini").grid(row=0, column=1, sticky="we")
+        style = ttk.Style()
+        self.configure(bg=style.lookup("TFrame", "background") or self.cget("bg"))
+        style.configure("Hint.TLabel", foreground="#8a8a8a")
+        style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
+        style.configure("Error.TLabel", foreground="#d13438")
 
-        tk.Label(body, text="Model", anchor="w", width=20).grid(row=1, column=0, sticky="w", pady=2)
-        self.model = tk.StringVar(value=cfg.setting("MODEL"))
-        self.model_box = ttk.Combobox(body, textvariable=self.model, width=30)
-        self.model_box.grid(row=1, column=1, sticky="we")
-        buttons = tk.Frame(body)
-        buttons.grid(row=1, column=2, padx=(4, 0))
-        tk.Button(buttons, text="Refresh", command=self.refresh_models).pack(side="left")
-        tk.Button(buttons, text="Download", command=self.download).pack(side="left", padx=(4, 0))
-        self.status = tk.Label(body, text="", anchor="w", fg="#666")
-        self.status.grid(row=2, column=1, columnspan=2, sticky="w")
+        outer = ttk.Frame(self, padding=(24, 20, 24, 20))
+        outer.pack(fill="both", expand=True)
+        ttk.Label(outer, text="Settings", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(outer, text="Changes take effect when you save (TextFixer restarts).",
+                  style="Hint.TLabel").pack(anchor="w", pady=(2, 14))
 
+        notebook = ttk.Notebook(outer)
+        notebook.pack(fill="both", expand=True)
         self.vars: dict[str, tk.StringVar] = {}
-        for i, (key, label) in enumerate(SETTINGS_FIELDS, start=3):
-            tk.Label(body, text=label, anchor="w", width=20).grid(row=i, column=0, sticky="w", pady=2)
-            var = tk.StringVar(value=cfg.setting(key))
-            self.vars[key] = var
-            tk.Entry(body, textvariable=var, width=33, show="*" if key == "API_KEY" else "").grid(
-                row=i, column=1, sticky="we")
-        # Tone shortcuts, in a second column: [PresetN] HOTKEY
-        tones = tk.LabelFrame(body, text="Tone shortcuts", padx=8, pady=4)
-        tones.grid(row=0, column=3, rowspan=len(SETTINGS_FIELDS) + 3, sticky="nw", padx=(16, 0))
-        self.tone_vars: dict[int, tk.StringVar] = {}
-        for i, preset in enumerate(cfg.presets):
-            tk.Label(tones, text=f"{preset.index} {preset.name}", anchor="w", width=13).grid(row=i, column=0, sticky="w", pady=2)
-            var = tk.StringVar(value=preset.hotkey)
-            self.tone_vars[preset.index] = var
-            tk.Entry(tones, textvariable=var, width=11).grid(row=i, column=1, sticky="w")
-        tk.Label(tones, text="Suggested: ^+F1 .. ^+F8\n(Ctrl+Shift+F1..F8).\nEmpty = only in the popup.",
-                 justify="left", fg="#666").grid(row=len(cfg.presets), column=0, columnspan=2, sticky="w", pady=(6, 0))
-        tk.Button(tones, text="Use Ctrl+Shift+F1..F8", command=self.use_function_keys).grid(
-            row=len(cfg.presets) + 1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        notebook.add(self._model_tab(notebook), text="  Model  ")
+        notebook.add(self._shortcuts_tab(notebook), text="  Shortcuts  ")
+        notebook.add(self._advanced_tab(notebook), text="  Advanced  ")
 
-        last = len(SETTINGS_FIELDS) + 3
-        hint = ("Provider: ollama = Ollama on this PC (leave API URL empty; for another PC use "
-                "http://address:11434); openai = any OpenAI-compatible server (set API URL); gemini = Google "
-                "(set API key).\nHotkeys (keyboard only): ^ Ctrl, ! Alt, + Shift, # Win, then a key, e.g. ^+E. "
-                "Empty turns one off; the popup (Ctrl+Shift+Space) can do everything. Saving restarts TextFixer.")
-        tk.Label(body, text=hint, wraplength=760, justify="left", fg="#666").grid(
-            row=last, column=0, columnspan=4, sticky="w", pady=8)
-        bar = tk.Frame(body)
-        bar.grid(row=last + 1, column=0, columnspan=4, sticky="w")
-        tk.Button(bar, text="Save and restart", width=16, command=self.save).pack(side="left")
-        tk.Button(bar, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
-        tk.Button(bar, text="Open config.ini", command=self.open_file).pack(side="left", padx=(18, 0))
+        footer = ttk.Frame(outer)
+        footer.pack(fill="x", pady=(16, 0))
+        self.error_label = ttk.Label(footer, text="", style="Error.TLabel", wraplength=420, justify="left")
+        self.error_label.pack(side="left", fill="x", expand=True)
+        ttk.Button(footer, text="Save and restart", style="Accent.TButton", command=self.save).pack(side="right")
+        ttk.Button(footer, text="Cancel", command=self.destroy).pack(side="right", padx=(0, 8))
         self.bind("<Escape>", lambda e: self.destroy())
         self.refresh_models()
 
+    # -- layout helpers ------------------------------------------------------------
+    def _rows(self, parent, fields, start: int = 0) -> int:
+        for row, (key, label) in enumerate(fields, start=start):
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=5, padx=(0, 16))
+            var = tk.StringVar(value=self.cfg.setting(key))
+            self.vars[key] = var
+            ttk.Entry(parent, textvariable=var, width=32, show="\u2022" if key == "API_KEY" else "").grid(
+                row=row, column=1, sticky="we", pady=5)
+        return start + len(fields)
+
+    def _section(self, parent, text: str, row: int) -> None:
+        ttk.Label(parent, text=text, font=("Segoe UI", 11, "bold")).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(14 if row else 0, 4))
+
+    # -- tabs -------------------------------------------------------------------------
+    def _model_tab(self, notebook) -> ttk.Frame:
+        tab = ttk.Frame(notebook, padding=18)
+        tab.columnconfigure(1, weight=1)
+        self._section(tab, "AI model", 0)
+
+        ttk.Label(tab, text="Provider").grid(row=1, column=0, sticky="w", pady=5, padx=(0, 16))
+        self.provider = tk.StringVar(value=self.cfg.provider if self.cfg.provider in PROVIDERS else "ollama")
+        self._provider_label = tk.StringVar(value=PROVIDERS[self.provider.get()])
+        box = ttk.Combobox(tab, textvariable=self._provider_label, values=list(PROVIDERS.values()),
+                           state="readonly", width=30)
+        box.grid(row=1, column=1, sticky="we", pady=5)
+        labels_to_keys = {v: k for k, v in PROVIDERS.items()}
+        box.bind("<<ComboboxSelected>>", lambda e: self.provider.set(labels_to_keys[self._provider_label.get()]))
+        self.provider.trace_add("write", lambda *a: self._provider_label.set(PROVIDERS.get(self.provider.get(), "")))
+
+        ttk.Label(tab, text="Model").grid(row=2, column=0, sticky="w", pady=5, padx=(0, 16))
+        self.model = tk.StringVar(value=self.cfg.setting("MODEL"))
+        self.model_box = ttk.Combobox(tab, textvariable=self.model, width=30)
+        self.model_box.grid(row=2, column=1, sticky="we", pady=5)
+        buttons = ttk.Frame(tab)
+        buttons.grid(row=2, column=2, padx=(8, 0))
+        ttk.Button(buttons, text="Refresh", command=self.refresh_models).pack(side="left")
+        ttk.Button(buttons, text="Download", command=self.download).pack(side="left", padx=(6, 0))
+        self.status = ttk.Label(tab, text="", style="Hint.TLabel", wraplength=380)
+        self.status.grid(row=3, column=1, columnspan=2, sticky="w")
+
+        self._section(tab, "Connection", 4)
+        row = self._rows(tab, MODEL_FIELDS, start=5)
+        self.vars["THINK"] = tk.StringVar(value="on" if self.cfg.setting("THINK").lower() in ("on", "true", "yes", "1")
+                                          else "off")
+        ttk.Checkbutton(tab, text="Let \"thinking\" models reason before answering (much slower)",
+                        variable=self.vars["THINK"], onvalue="on", offvalue="off").grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(tab, text="Ollama on this PC: leave the server address empty. Another PC: http://address:11434.\n"
+                            "OpenAI-compatible: the .../v1/chat/completions address. Gemini: only the API key.",
+                  style="Hint.TLabel", justify="left").grid(row=row + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        return tab
+
+    @staticmethod
+    def _two_columns(parent, items: list[tuple[str, tk.StringVar]], label_width: int) -> None:
+        """Label + entry pairs in two columns (half of them on the right)."""
+        per_column = (len(items) + 1) // 2
+        for i, (label, var) in enumerate(items):
+            r, c = i % per_column, (i // per_column) * 2
+            ttk.Label(parent, text=label, width=label_width).grid(row=r, column=c, sticky="w", pady=4,
+                                                                  padx=(0 if c == 0 else 24, 8))
+            ttk.Entry(parent, textvariable=var, width=12).grid(row=r, column=c + 1, sticky="w", pady=4)
+
+    def _shortcuts_tab(self, notebook) -> ttk.Frame:
+        tab = ttk.Frame(notebook, padding=18)
+        self._section(tab, "Tones", 0)
+        tones = ttk.Frame(tab)
+        tones.grid(row=1, column=0, sticky="w")
+        self.tone_vars: dict[int, tk.StringVar] = {}
+        for preset in self.cfg.presets:
+            self.tone_vars[preset.index] = tk.StringVar(value=preset.hotkey)
+        self._two_columns(tones, [(f"{p.index}  {p.name}", self.tone_vars[p.index]) for p in self.cfg.presets], 15)
+        ttk.Button(tab, text="Use Ctrl+Shift+F1 \u2026 F8", command=self.use_function_keys).grid(
+            row=2, column=0, sticky="w", pady=(8, 0))
+
+        self._section(tab, "Other shortcuts", 3)
+        other = ttk.Frame(tab)
+        other.grid(row=4, column=0, sticky="w")
+        for key, _ in SHORTCUT_FIELDS:
+            self.vars[key] = tk.StringVar(value=self.cfg.setting(key))
+        self._two_columns(other, [(label, self.vars[key]) for key, label in SHORTCUT_FIELDS], 15)
+        ttk.Label(tab, text="Keyboard only: ^ Ctrl, ! Alt, + Shift, # Win, then a key (e.g. ^+F1, ^!E).\n"
+                            "Leave one empty to turn it off. The popup can do everything.",
+                  style="Hint.TLabel", justify="left").grid(row=5, column=0, sticky="w", pady=(10, 0))
+        return tab
+
+    def _advanced_tab(self, notebook) -> ttk.Frame:
+        tab = ttk.Frame(notebook, padding=18)
+        tab.columnconfigure(1, weight=1)
+        self._section(tab, "Advanced", 0)
+        row = self._rows(tab, ADVANCED_FIELDS, start=1)
+        ttk.Label(tab, text="Apps: process names separated by commas, e.g. EXCEL.EXE, Code.exe.\n"
+                            "Tones and their prompts are edited in config.ini.",
+                  style="Hint.TLabel", justify="left").grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Button(tab, text="Open config.ini", command=self.open_file).grid(row=row + 1, column=0, sticky="w",
+                                                                              pady=(12, 0))
+        return tab
+
+    # -- models ----------------------------------------------------------------------
     def _current_llm(self):
         """An LLM client using what is typed in the window (nothing is saved or changed)."""
         from .llm import LLMClient
@@ -574,8 +677,6 @@ class SettingsWindow(tk.Toplevel):
                 names, error = [], "Cannot reach Ollama. Is it running? Start it, then click Refresh."
             self.ui.call(self._models_found, names, error, mine)
 
-        import threading
-
         threading.Thread(target=work, daemon=True).start()
 
     def _models_found(self, names: list[str], error: str, request_id: int) -> None:
@@ -591,6 +692,7 @@ class SettingsWindow(tk.Toplevel):
             return
         PullWindow(self.ui, self._current_llm(), name, on_done=self.refresh_models)
 
+    # -- shortcuts ------------------------------------------------------------------
     def use_function_keys(self) -> None:
         for n, (index, var) in enumerate(sorted(self.tone_vars.items()), start=1):
             var.set(f"^+F{n}")
@@ -609,7 +711,7 @@ class SettingsWindow(tk.Toplevel):
         """Problems with the typed shortcuts: unknown keys, mouse buttons, the same keys twice."""
         from .hotkeys import parse_hotkey
 
-        entries = [(label, settings[key]) for key, label in SETTINGS_FIELDS if key.endswith("_HOTKEY")]
+        entries = [(label, settings[key]) for key, label in SHORTCUT_FIELDS]
         names = {p.index: f"{p.index} {p.name}" for p in self.cfg.presets}
         entries += [(names[i], var.get().strip()) for i, var in sorted(self.tone_vars.items())]
         problems, seen = [], {}
@@ -637,7 +739,7 @@ class SettingsWindow(tk.Toplevel):
             settings[key] = var.get().strip()
         problems = self.check_hotkeys(settings)
         if problems:
-            messagebox.showerror("TextFixer", "Please fix these shortcuts first:\n\n" + "\n".join(problems), parent=self)
+            self.error_label.configure(text="Please fix: " + "; ".join(problems))
             return
         self.cfg.update("Settings", settings)
         for index, var in self.tone_vars.items():

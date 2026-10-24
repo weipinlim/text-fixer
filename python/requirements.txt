@@ -3,5 +3,6 @@ pynput
 pyperclip
 pystray
 pillow
+sv-ttk          # Windows 11 look for the settings window (optional: falls back to the standard look)
 # Only for building the .exe (build_exe.bat installs it for you):
 #   pip install pyinstaller

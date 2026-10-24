@@ -290,8 +290,6 @@ def test_settings_tone_shortcuts_save_and_checks(app, ui, monkeypatch):
     from textfixer.config import Config
     from textfixer.ui import SettingsWindow
 
-    errors = []
-    monkeypatch.setattr("textfixer.ui.messagebox.showerror", lambda title, msg, parent=None: errors.append(msg))
     saved = []
     win = SettingsWindow(ui, app, lambda: saved.append(True))
     assert win.tone_vars[1].get() == "^+F1" and len(win.tone_vars) == 8
@@ -301,9 +299,9 @@ def test_settings_tone_shortcuts_save_and_checks(app, ui, monkeypatch):
     win.tone_vars[3].set("^LButton")         # mouse
     win.tone_vars[4].set("^+Nonsense")       # unknown key
     win.save()
-    assert saved == [] and len(errors) == 1
-    msg = errors[0]
-    assert "2 Professional and Popup both use Ctrl+Shift+Space" in msg or "Popup and 2 Professional" in msg
+    assert saved == []
+    msg = win.error_label.cget("text")
+    assert "2 Professional and Popup (everything) both use Ctrl+Shift+Space" in msg
     assert "3 Sarcastic: '^LButton' is a mouse button" in msg and "4 Diplomatic: '^+Nonsense'" in msg
 
     win.use_function_keys()
