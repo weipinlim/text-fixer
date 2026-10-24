@@ -98,15 +98,16 @@ class FakeClipboard:
 class FakeHotkeys:
     suppresses = False
     paused = False
-    on_any_input = None
+    errors: list = []
 
     def register(self, action, spec):
-        from textfixer.hotkeys import parse_hotkey
-        return parse_hotkey(spec)
+        from textfixer.hotkeys import HotkeyManager
+        return HotkeyManager(lambda a, c: None).register(action, spec)
 
     def start(self): pass
     def stop(self): pass
-    def wait_mouse_release(self, *a, **k): pass
+    def set_paused(self, paused): self.paused = paused
+    def passthrough(self, combo, send): pass
 
 
 @pytest.fixture(scope="session")

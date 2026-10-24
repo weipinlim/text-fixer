@@ -20,8 +20,8 @@ class Clipboard:
     def __init__(self, wait_ms: int = 300, controller=None):
         self.wait_ms = wait_ms
         self._controller = controller
-        # Set by the app to the hotkey hook's view of the real keyboard; without it, modifiers we
-        # lift are not pressed again (better a released key than one stuck down)
+        # Optional: tells whether the user is really still holding a modifier. Without it, the
+        # modifiers we lift are not pressed again (better a released key than one stuck down)
         self.physically_down = None
 
     @property

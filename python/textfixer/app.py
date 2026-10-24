@@ -12,7 +12,7 @@ import tkinter as tk
 from . import winapi
 from .clipboard import Clipboard, match_whitespace, send_combo
 from .config import (CUSTOM_PROMPT, INCOMPATIBLE_MARK, INCOMPATIBLE_RULE, Config, Preset)
-from .hotkeys import Combo, HotkeyManager
+from .hotkeys import Combo, HotkeyManager, MouseHotkeyError
 from .llm import LLMClient
 from .ui import CompareWindow, Context, Job, PopupWindow, ResultWindow, SettingsWindow, Ui
 
@@ -37,45 +37,60 @@ class App:
         self.clip = clip or Clipboard(int(cfg.number("SELECTION_WAIT_MS", 300)))
         self.llm = llm or LLMClient(cfg)
         self.hk = hotkeys or HotkeyManager(self.on_hotkey)
-        if hasattr(self.hk, "physically_down"):
-            self.clip.physically_down = self.hk.physically_down
         self.busy = False
         self.registered: list[tuple[str, Combo]] = []
         self.hotkey_errors: list[str] = []
+        self.mouse_dropped: list[str] = []  # mouse shortcuts from an older config.ini, now switched off
         self.on_restart = self.restart
 
     # -- setup -----------------------------------------------------------------
     def register_hotkeys(self) -> None:
         self.registered.clear()
+        dropped: dict[str, dict[str, str]] = {}
         for setting, (action, label) in ACTIONS.items():
             spec = self.cfg.setting(setting)
-            if spec:
-                self._register(action, spec, setting, label)
+            if spec and not self._register(action, spec, setting, label):
+                dropped.setdefault("Settings", {})[setting] = ""
         for preset in self.cfg.presets:
-            if preset.hotkey:
-                self._register(f"preset{preset.index}", preset.hotkey, f"[Preset{preset.index}] HOTKEY", preset.name)
+            if preset.hotkey and not self._register(f"preset{preset.index}", preset.hotkey,
+                                                    f"[Preset{preset.index}] HOTKEY", preset.name):
+                dropped.setdefault(f"Preset{preset.index}", {})["HOTKEY"] = ""
+        # Mouse shortcuts from an older config.ini: switch them off in the file, so the note shows once
+        for section, values in dropped.items():
+            self.cfg.update(section, values)
 
-    def _register(self, action: str, spec: str, where: str, label: str) -> None:
+    def _register(self, action: str, spec: str, where: str, label: str) -> bool:
+        """False only for a mouse shortcut (dropped); other problems are reported as errors."""
         try:
             combo = self.hk.register(action, spec)
+        except MouseHotkeyError:
+            self.mouse_dropped.append(f"{spec} ({label})")
+            return False
         except ValueError as exc:
             self.hotkey_errors.append(f"{where}={spec}: {exc}")
-            return
+            return True
         self.registered.append((label, combo))
+        return True
 
     def hotkey_summary(self) -> str:
         return "\n".join(f"{combo.describe()} = {label}" for label, combo in self.registered)
 
     def start(self) -> None:
         self.register_hotkeys()
-        self.hk.on_any_input = lambda: self.ui.call(self.ui.hide_tip)
         try:
             self.hk.start()
         except Exception as exc:
             log.error("Could not start the hotkeys: %s", exc)
             self.hotkey_errors.append(f"Hotkeys could not be started: {exc}")
-        if self.hotkey_errors:
-            self.ui.call(self.ui.error, "Some hotkeys are not valid:\n\n" + "\n".join(self.hotkey_errors))
+        problems = self.hotkey_errors + getattr(self.hk, "errors", [])
+        if problems:
+            self.ui.call(self.ui.error, "Some hotkeys do not work:\n\n" + "\n".join(problems) +
+                         "\n\nChange them in Settings (tray icon).")
+        if self.mouse_dropped:
+            self.ui.call(self.ui.info, "Mouse shortcuts are switched off in this version, because they made the "
+                         "mouse slow:\n\n" + "\n".join(self.mouse_dropped) + "\n\nUse Ctrl+Shift+Space (popup) "
+                         "instead: it has every tone plus Compare and Explain. You can also give those "
+                         "keyboard shortcuts in Settings.")
 
     # -- helpers ---------------------------------------------------------------
     def check_ollama(self) -> None:
@@ -94,22 +109,10 @@ class App:
         return winapi.process_name(hwnd).lower() in self.cfg.excluded_apps()
 
     def passthrough(self, combo: Combo | None) -> None:
-        """Give the app the key/click we swallowed, as if TextFixer was not running."""
+        """The hotkey was not used (nothing selected...): give the keys to the app after all."""
         if combo is None or not self.hk.suppresses:
             return
-        try:
-            if combo.is_mouse:
-                from pynput.mouse import Button, Controller
-
-                button = {"lbutton": Button.left, "rbutton": Button.right, "mbutton": Button.middle}[combo.key]
-                mouse = Controller()
-                mouse.press(button)
-                self.hk.wait_mouse_release(combo.key)  # hold it as long as the user does (drags still work)
-                mouse.release(button)
-            else:
-                send_combo(self.clip.controller, combo)
-        except Exception:
-            log.exception("pass-through failed")
+        self.hk.passthrough(combo, lambda: send_combo(self.clip.controller, combo))
 
     def release(self, ctx: Context) -> None:
         """Nothing was done with the selection: put the clipboard back."""
@@ -285,7 +288,7 @@ class App:
 
     # -- tray actions -------------------------------------------------------------
     def toggle_pause(self) -> bool:
-        self.hk.paused = not self.hk.paused
+        self.hk.set_paused(not self.hk.paused)
         return self.hk.paused
 
     @staticmethod

@@ -5,13 +5,17 @@ by an LLM running in **[Ollama](https://ollama.com)** on your PC (or any OpenAI-
 Gemini). It does the same things as the [AutoHotkey version](../README.md) and uses the same
 `config.ini` format, so tones and hotkeys move between them:
 
-- tone hotkeys (`Ctrl+1`..`Ctrl+5`) replace the selection; `Ctrl+Left click` runs the default tone
-- `Ctrl+Shift+Space`: popup with a "describe your change" box and a button per tone
+- `Ctrl+1`..`Ctrl+5`: rewrite the selection in a tone and replace it
 - `Ctrl+6/7/8`: Summary, Key Points, Table in a result window (Markdown, follow-up chat)
-- `Ctrl+Shift+Left click` / `Ctrl+Shift+Right click`: every tone's answer in tabs / as a list (hover for full text)
-- `Ctrl+Middle click`: explain the selected word in a tooltip
+- `Ctrl+Shift+Space`: popup at the cursor: describe any change, pick a tone, **Compare all**
+  (every tone's answer, in tabs or as a list) or **Explain** (the selected word, in a tooltip)
 - `Ctrl+Alt+Space`: chat window
 - tray icon: settings, pause hotkeys, start with Windows
+
+Shortcuts are **keyboard only** and use Windows' own hotkey system, so TextFixer never slows down
+your mouse or keyboard. (Mouse shortcuts like Ctrl+click, which the AutoHotkey version has, are not
+available here; an older `config.ini` that has them gets them switched off once, with a note.) You
+can give Compare and Explain their own keys in Settings.
 
 > The earlier OpenVINO/NPU version of this app is on the branch `feature/python-npu`. This branch
 > replaces it with Ollama: Ollama is the model server, so there is no local API server, device
@@ -102,19 +106,20 @@ code-signed, so Windows SmartScreen or antivirus may warn on first run.
 
 ## Differences from the AutoHotkey version
 
-- On Windows the matched hotkey or click is swallowed and passed through to the app when nothing is
-  selected, like the AutoHotkey version. This uses low-level hooks and is the part most worth testing
-  on your PC.
+- Keyboard shortcuts only (no Ctrl+click and so on): they use Windows' RegisterHotKey, so nothing
+  runs on your other keystrokes or mouse moves. When nothing is selected the keys still reach the app
+  (e.g. Ctrl+1 in Outlook), like in the AutoHotkey version.
 - Only **text** on the clipboard is saved and restored (images or files on the clipboard are lost
   when a hotkey runs). The AutoHotkey version restores everything.
 - The Settings window restarts the app when you save, and can download Ollama models.
 
 ## Troubleshooting
 
-- **A key or the mouse seems stuck (nothing can be clicked)**: quit TextFixer (tray icon > Quit, or
-  end it in Task Manager), then press and release Ctrl, Shift and Alt and click each mouse button
-  once. Please report it with what you pressed just before. (Versions before Oct 2026 had a bug that
-  swallowed mouse-button releases after a Ctrl+click; it is fixed.)
+- **A key or the mouse seems stuck, or the mouse is sluggish**: that was the older version's mouse
+  shortcuts, which this version no longer uses. Quit the old TextFixer (tray icon > Quit, or end it in
+  Task Manager), press and release Ctrl, Shift and Alt once, and install the current version.
+- **"... is already used by another program"**: another app owns that shortcut. Pick another one in
+  Settings.
 - **"Cannot reach Ollama"**: start Ollama (Start menu), or check `API_URL`.
 - **"Ollama does not have the model ..."**: Settings > Download model, or `ollama pull <model>`.
 - **"Every tone at once" takes a while**: a model on your PC writes one answer at a time, so 5 tones
@@ -122,8 +127,7 @@ code-signed, so Windows SmartScreen or antivirus may warn on first run.
   version straight away; closing it stops the rest. Check `THINK=off` too.
 - **The first answer is slow**: the model is loading into memory. Later ones are faster until
   `KEEP_ALIVE` runs out.
-- **Nothing happens on a hotkey**: another program may own it. Change it in Settings. The tray
-  icon's **Show hotkeys** lists what is active.
+- **Nothing happens on a hotkey**: the tray icon's **Show hotkeys** lists what is active.
 - **A hotkey acts on the wrong app or pastes nothing**: some apps (Excel, VS Code) copy even with no
   selection; add them to `EXCLUDE_APPS`.
 

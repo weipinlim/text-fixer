@@ -235,11 +235,52 @@ def test_settings_cancel_changes_nothing(app, ui):
 
 
 def test_hotkey_registration_and_errors(cfg, ui):
-    from textfixer.hotkeys import HotkeyManager
-
     cfg.update("Settings", {"POPUP_HOTKEY": "^+Nonsense"})
-    app = App(cfg, ui, clip=FakeClipboard(), hotkeys=HotkeyManager(lambda a, c: None))
+    app = App(cfg, ui, clip=FakeClipboard(), hotkeys=FakeHotkeys())
     app.register_hotkeys()
     assert any("POPUP_HOTKEY" in e for e in app.hotkey_errors)
     summary = app.hotkey_summary()
-    assert "Ctrl+Left click = default tone" in summary and "Ctrl+1 = Casual" in summary
+    assert "Ctrl+1 = Casual" in summary and "Ctrl+Alt+Space = open the chat window" in summary
+
+
+def test_old_mouse_shortcuts_are_switched_off_once(cfg, ui, monkeypatch):
+    from textfixer.config import Config
+
+    cfg.update("Settings", {"DEFAULT_HOTKEY": "^LButton", "EXPLAIN_HOTKEY": "^MButton"})
+    cfg.update("Preset3", {"HOTKEY": "^RButton"})
+    shown = []
+    monkeypatch.setattr(ui, "info", lambda message, title="TextFixer": shown.append(message))
+    app = App(cfg, ui, clip=FakeClipboard(), hotkeys=FakeHotkeys())
+    app.start()
+    ui.root.update()
+    assert shown and "^LButton (default tone)" in shown[0] and "Ctrl+Shift+Space" in shown[0]
+    assert app.hotkey_errors == []
+    again = Config(cfg.path)
+    assert again.setting("DEFAULT_HOTKEY") == "" and again.setting("EXPLAIN_HOTKEY") == ""
+    assert again.presets[2].hotkey == "" and again.setting("POPUP_HOTKEY") == "^+Space"
+    shown.clear()
+    App(again, ui, clip=FakeClipboard(), hotkeys=FakeHotkeys()).start()
+    ui.root.update()
+    assert shown == []  # the note only shows once
+
+
+def test_popup_compare_and_explain_buttons(app, ui):
+    ctx = ctx_for(app)
+    app.show_popup(ctx)
+    popup = next(iter(ui.windows))
+    popup.compare("list")
+    assert pump(ui, lambda: ui.windows and isinstance(next(iter(ui.windows)), CompareWindow))
+    win = next(iter(ui.windows))
+    assert win.mode == "list"
+    win.close()
+    app.show_popup(ctx_for(app))
+    next(iter(ui.windows)).explain()
+    assert pump(ui, lambda: ui._tip is not None and "ECHO" in ui._tip.winfo_children()[0].cget("text"))
+
+
+def test_passthrough_goes_to_the_hotkey_manager(app):
+    sent = []
+    app.hk.suppresses = True
+    app.hk.passthrough = lambda combo, send: sent.append(combo)
+    app.passthrough(parse_hotkey("^1"))
+    assert sent == [parse_hotkey("^1")]

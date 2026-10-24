@@ -1,100 +1,117 @@
-"""The Windows low-level hook filters, fed simulated events (the logic is plain Python)."""
-from types import SimpleNamespace
+"""The Windows hotkey thread (RegisterHotKey), driven by a fake Windows API."""
+import queue
+import time
 
 import pytest
 
-import textfixer.hotkeys as hotkeys
-from textfixer.hotkeys import HotkeyManager
-
-LDOWN, LUP, RDOWN, RUP = 0x201, 0x202, 0x204, 0x205
-KEYDOWN, KEYUP = 0x100, 0x101
+from textfixer.hotkeys import MOD_NOREPEAT, WM_HOTKEY, HotkeyManager, MouseHotkeyError
 
 
-class FakeListener:
-    def __init__(self):
-        self.suppressed = 0
+class FakeApi:
+    """Records RegisterHotKey calls and lets the test post messages like Windows would."""
 
-    def suppress_event(self):
-        self.suppressed += 1
+    def __init__(self, taken=()):
+        self.registered: dict[int, tuple[int, int]] = {}
+        self.calls: list[tuple] = []
+        self.taken = set(taken)  # (mods, vk) another program owns
+        self.messages: "queue.Queue" = queue.Queue()
+
+    def init_queue(self):
+        pass
+
+    def thread_id(self):
+        return 42
+
+    def register(self, hotkey_id, mods, vk):
+        self.calls.append(("register", hotkey_id))
+        if (mods & ~MOD_NOREPEAT, vk) in self.taken:
+            return False
+        self.registered[hotkey_id] = (mods, vk)
+        return True
+
+    def unregister(self, hotkey_id):
+        self.calls.append(("unregister", hotkey_id))
+        self.registered.pop(hotkey_id, None)
+
+    def get_message(self):
+        return self.messages.get(timeout=5)
+
+    def post(self, thread_id, message, wparam=0):
+        self.messages.put((message, wparam))
+
+
+def wait_for(cond, timeout=3):
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return cond()
 
 
 @pytest.fixture
-def mgr(monkeypatch):
+def setup():
     fired = []
-    m = HotkeyManager(lambda action, combo: fired.append(action))
-    m._fire = lambda action, combo: fired.append(action)  # no threads in tests
-    m.fired = fired
-    m.register("default", "^LButton")
+    api = FakeApi(taken={(0x2 | 0x1, 0x20)})  # Ctrl+Alt+Space belongs to another program
+    m = HotkeyManager(lambda action, combo: fired.append(action), api=api)
     m.register("preset1", "^1")
-    m.mods = frozenset()
-    monkeypatch.setattr(hotkeys, "_mods_now", lambda: m.mods)
-    return m
+    m.register("popup", "^+Space")
+    m.register("chat", "^!Space")
+    m.start()
+    yield m, api, fired
+    m.stop()
 
 
-def mouse(m, msg, injected=False):
-    lst = FakeListener()
-    m._win_mouse(lst, msg, SimpleNamespace(flags=1 if injected else 0))
-    return lst.suppressed
+def id_of(m, action):
+    return next(i for i, (a, _) in m._ids.items() if a == action)
 
 
-def key(m, msg, vk, injected=False):
-    lst = FakeListener()
-    m._win_key(lst, msg, SimpleNamespace(flags=0x10 if injected else 0, vkCode=vk))
-    return lst.suppressed
+def test_registers_with_the_right_modifiers_and_reports_taken_ones(setup):
+    m, api, _ = setup
+    assert api.registered[id_of(m, "preset1")] == (0x2 | MOD_NOREPEAT, 0x31)
+    assert api.registered[id_of(m, "popup")] == (0x2 | 0x4 | MOD_NOREPEAT, 0x20)
+    assert id_of(m, "chat") not in api.registered
+    assert m.errors == ["Ctrl+Alt+Space is already used by another program"]
 
 
-def test_ctrl_click_is_swallowed_with_its_release(mgr):
-    mgr.mods = frozenset({"ctrl"})
-    assert mouse(mgr, LDOWN) == 1 and mgr.fired == ["default"]
-    assert mouse(mgr, LUP) == 1
+def test_hotkey_message_fires_the_action(setup):
+    m, api, fired = setup
+    api.post(42, WM_HOTKEY, id_of(m, "popup"))
+    assert wait_for(lambda: fired == ["popup"])
 
 
-def test_normal_clicks_after_a_hotkey_click_are_not_swallowed(mgr):
-    mgr.mods = frozenset({"ctrl"})
-    mouse(mgr, LDOWN)
-    mouse(mgr, LUP)
-    mgr.mods = frozenset()
-    for _ in range(3):  # ordinary clicks afterwards must reach Windows untouched
-        assert mouse(mgr, LDOWN) == 0
-        assert mouse(mgr, LUP) == 0
-    assert mgr.fired == ["default"]
+def test_pause_gives_the_keys_back_and_resume_takes_them_again(setup):
+    m, api, fired = setup
+    m.set_paused(True)
+    assert wait_for(lambda: not api.registered)
+    api.post(42, WM_HOTKEY, id_of(m, "preset1"))  # a late message while paused does nothing
+    assert wait_for(api.messages.empty)
+    time.sleep(0.05)  # let the hotkey thread finish handling it
+    m.set_paused(False)
+    assert wait_for(lambda: id_of(m, "preset1") in api.registered)
+    assert fired == []
 
 
-def test_release_is_known_after_the_swallowed_up(mgr):
-    mgr.mods = frozenset({"ctrl"})
-    mouse(mgr, LDOWN)
-    mouse(mgr, LUP)
-    mgr.wait_mouse_release("lbutton", timeout=0.1)  # returns at once: already released
+def test_passthrough_types_the_keys_while_the_hotkey_is_off(setup):
+    m, api, _ = setup
+    hid = id_of(m, "preset1")
+    seen = []
+    m.passthrough(m._ids[hid][1], lambda: seen.append(hid in api.registered))
+    assert wait_for(lambda: seen and hid in api.registered)
+    assert seen == [False]  # the keys were sent while our hotkey was unregistered
+    assert api.calls[-2:] == [("unregister", hid), ("register", hid)]
 
 
-def test_injected_clicks_pass(mgr):
-    mgr.mods = frozenset({"ctrl"})
-    assert mouse(mgr, LDOWN, injected=True) == 0 and mouse(mgr, LUP, injected=True) == 0
-    assert mgr.fired == []
+def test_stop_unregisters_everything(setup):
+    m, api, _ = setup
+    m.stop()
+    assert wait_for(lambda: not api.registered)
 
 
-def test_other_button_is_not_affected(mgr):
-    mgr.mods = frozenset({"ctrl"})
-    mouse(mgr, LDOWN)
-    mouse(mgr, LUP)
-    mgr.mods = frozenset()
-    assert mouse(mgr, RDOWN) == 0 and mouse(mgr, RUP) == 0
-
-
-def test_key_hotkey_down_and_up_swallowed_then_normal_typing_passes(mgr):
-    mgr.mods = frozenset({"ctrl"})
-    assert key(mgr, KEYDOWN, 0x31) == 1 and mgr.fired == ["preset1"]
-    assert key(mgr, KEYDOWN, 0x31) == 1 and mgr.fired == ["preset1"]  # auto-repeat: no second fire
-    assert key(mgr, KEYUP, 0x31) == 1
-    mgr.mods = frozenset()
-    assert key(mgr, KEYDOWN, 0x31) == 0 and key(mgr, KEYUP, 0x31) == 0
-
-
-def test_paused_swallows_nothing(mgr):
-    mgr.paused = True
-    mgr.mods = frozenset({"ctrl"})
-    assert mouse(mgr, LDOWN) == 0 and mouse(mgr, LUP) == 0
-    assert key(mgr, KEYDOWN, 0x31) == 0 and key(mgr, KEYUP, 0x31) == 0
+def test_mouse_hotkeys_are_refused():
+    m = HotkeyManager(lambda a, c: None, api=FakeApi())
+    with pytest.raises(MouseHotkeyError):
+        m.register("default", "^LButton")
 
 
 # ---- Clipboard.send_ctrl must never leave a modifier stuck down ----------------------------
@@ -147,12 +164,3 @@ def test_lifted_shift_is_restored_while_still_held(monkeypatch):
 def test_without_hook_information_nothing_is_pressed_again(monkeypatch):
     events = send(monkeypatch, {"alt"}, physically_down=None)
     assert ("press", "Key.alt") not in events and events[0] == ("release", "Key.alt")
-
-
-def test_hook_tracks_physical_modifiers(mgr):
-    assert not mgr.physically_down("shift")
-    key(mgr, KEYDOWN, 0xA0)  # left shift
-    assert mgr.physically_down("shift")
-    key(mgr, KEYDOWN, 0xA0, injected=True)  # our own events do not count
-    key(mgr, KEYUP, 0xA0)
-    assert not mgr.physically_down("shift")

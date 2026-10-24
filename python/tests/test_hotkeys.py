@@ -22,6 +22,7 @@ def test_register_first_wins():
     m.register("two", "^1")
     assert m.combos[(frozenset({"ctrl"}), "1")][0] == "one"
     assert m._key_for_vk(0x31) == "1" and m._key_for_vk(0x20) == "space" and m._key_for_vk(0x72) == "f3"
+    assert parse_hotkey("^LButton").is_mouse
 
 
 def test_match_whitespace():

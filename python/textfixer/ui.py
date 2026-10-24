@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import logging
 import queue
+import threading
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import messagebox, ttk
@@ -257,6 +258,13 @@ class PopupWindow(tk.Toplevel):
         for i, preset in enumerate(app.cfg.presets):
             tk.Button(body, text=f"{preset.index} {preset.name}", width=20,
                       command=lambda p=preset: self.pick(p)).grid(row=2 + i // 3, column=i % 3, padx=2, pady=2)
+        row = 3 + (len(app.cfg.presets) - 1) // 3
+        tk.Label(body, text="Or:", anchor="w").grid(row=row, column=0, columnspan=3, sticky="we", pady=(6, 0))
+        extras = [("Compare all (tabs)", lambda: self.compare("tabs")),
+                  ("Compare all (list)", lambda: self.compare("list")),
+                  ("Explain", self.explain)]
+        for i, (text, command) in enumerate(extras):
+            tk.Button(body, text=text, width=20, command=command).grid(row=row + 1, column=i, padx=2, pady=2)
         self.entry.bind("<Return>", lambda e: self.send())
         self.bind("<Escape>", lambda e: self.close())
         self.ui.place_near_cursor(self)
@@ -299,6 +307,14 @@ class PopupWindow(tk.Toplevel):
             return
         self._take()
         self.app.run_custom(instruction, self.ctx)
+
+    def compare(self, mode: str) -> None:
+        self._take()
+        threading.Thread(target=self.app.compare, args=(self.ctx, mode), daemon=True).start()
+
+    def explain(self) -> None:
+        self._take()
+        threading.Thread(target=self.app.explain, args=(self.ctx,), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -511,8 +527,8 @@ class SettingsWindow(tk.Toplevel):
         last = len(SETTINGS_FIELDS) + 3
         hint = ("Provider: ollama = Ollama on this PC (leave API URL empty; for another PC use "
                 "http://address:11434); openai = any OpenAI-compatible server (set API URL); gemini = Google "
-                "(set API key).\nHotkeys: ^ Ctrl, ! Alt, + Shift, # Win; empty turns one off. "
-                "Saving restarts TextFixer.")
+                "(set API key).\nHotkeys (keyboard only): ^ Ctrl, ! Alt, + Shift, # Win, then a key, e.g. ^+E. "
+                "Empty turns one off; the popup (Ctrl+Shift+Space) can do everything. Saving restarts TextFixer.")
         tk.Label(body, text=hint, wraplength=620, justify="left", fg="#666").grid(
             row=last, column=0, columnspan=3, sticky="w", pady=8)
         bar = tk.Frame(body)
