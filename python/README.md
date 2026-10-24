@@ -2,7 +2,7 @@
 
 The Python version of TextFixer. Select text in any app, press a hotkey, and the text is rewritten
 by an LLM running in **[Ollama](https://ollama.com)** on your PC (or any OpenAI-compatible server, or
-Gemini). It does the same things as the [AutoHotkey version](../README.md) and uses the same
+Gemini). It does the same things as the [AutoHotkey version](../ahk/README.md) and uses the same
 `config.ini` format, so tones and hotkeys move between them:
 
 - `Ctrl+Shift+F1`..`F5`: rewrite the selection in a tone and replace it
